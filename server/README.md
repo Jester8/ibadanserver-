@@ -43,6 +43,9 @@ All routes except `/health`, auth and the public track list need `Authorization:
 
 ## Authentication
 
+* **No verification by default.** Sign up takes a username, a name, an email and an avatar and lets the player straight in; log in takes the email or the username.
+  Anyone who knows an email or username can log in as that player, so turn on codes (`EMAIL_CODES=1` plus `SMTP_URL`) before a public launch.
+
 * Sign up and log in both use an **emailed one-time code**. There are no passwords.
 * Without `SMTP_URL` (local development) the code is printed in the server log and returned as `devCode` so you can test.
   In production (`NODE_ENV=production`) it is **never** returned.
