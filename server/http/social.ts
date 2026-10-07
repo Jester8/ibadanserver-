@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { cleanChat } from "../../src/lib/moderation";
-import { addBlock, addDm, acceptFriend, blockedEither, countLevel, setFriendLevel, blocksOf, countFriends, dmThread, dmThreads, friendshipsOf, getDm, getFriendship, getPlayer, markRead, removeBlock, removeFriendship, requestFriend } from "../db/repo";
+import { addBlock, addDm, acceptFriend, blockedEither, countLevel, searchPlayers, setFriendLevel, blocksOf, countFriends, dmThread, dmThreads, friendshipsOf, getDm, getFriendship, getPlayer, markRead, removeBlock, removeFriendship, requestFriend } from "../db/repo";
 import { isOnline, sendToPid } from "../presence";
 import { verifyToken } from "./auth";
 
@@ -196,6 +196,18 @@ export async function handleSocial(req: IncomingMessage, res: ServerResponse, ur
       const r = await sendDm(me, other, body!.text);
       return send(r.ok ? 200 : 400, r.ok ? r.msg : { error: r.error }), true;
     }
+  }
+
+  // ---------------- find people by username or name
+  if (req.method === "GET" && parts[1] === "players" && parts[2] === "search") {
+    const q = clean(url.searchParams.get("q"), 30);
+    if (q.length < 2) return send(200, { players: [] }), true;
+    const rows = await searchPlayers(q, me);
+    const blocked = new Set(await blocksOf(me));
+    const out = rows
+      .filter((p) => !blocked.has(p.pid))
+      .map((p) => ({ pid: p.pid, name: p.name, username: p.username, look: p.profile_json ? JSON.parse(p.profile_json) : null, online: isOnline(p.pid) }));
+    return send(200, { players: out }), true;
   }
 
   // ---------------- public profile card

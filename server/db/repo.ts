@@ -42,6 +42,12 @@ export async function importLegacyPlots(dir: string) {
 export type PlayerRow = { pid: string; name: string; username: string | null; email: string | null; email_verified: number; profile_json: string | null; password_hash: string | null };
 const PLAYER = "pid, name, username, email, email_verified, profile_json, password_hash";
 
+/** Players whose username starts with the text, or whose name contains it. Never includes you. */
+export async function searchPlayers(q: string, me: string) {
+  const esc = q.toLowerCase().replace(/[\\%_]/g, "\\$&");
+  return db.query<PlayerRow>(`SELECT ${PLAYER} FROM players WHERE pid <> $1 AND (LOWER(username) LIKE $2 OR LOWER(name) LIKE $3) ORDER BY LOWER(username) LIMIT 8`, [me, `${esc}%`, `%${esc}%`]);
+}
+
 export const getPlayerByUsername = (username: string) => one<PlayerRow>(`SELECT ${PLAYER} FROM players WHERE LOWER(username) = LOWER($1)`, [username]);
 
 export async function touchPlayer(pid: string, name: string) {
