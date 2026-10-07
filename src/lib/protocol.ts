@@ -85,6 +85,9 @@ export type S2C =
   | { t: "election"; e: Election; myVote: string | null }
   | { t: "dm"; id: number; from: string; to: string; text: string; at: number; fromName: string }
   | { t: "friendEvent"; kind: "request" | "accepted" | "removed"; pid: string; name: string }
+  | { t: "relAsk"; from: string; name: string; level: string }
+  | { t: "relChanged"; pid: string; name: string; level: string; by: "them" | "accepted" }
+  | { t: "relDeclined"; pid: string; name: string; level: string }
   | { t: "presence"; pid: string; online: boolean }
   | { t: "dmError"; error: string }
   | { t: "photo"; photoId: string; from: string; name: string; data: string }

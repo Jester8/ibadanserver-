@@ -102,11 +102,20 @@ export const deleteCode = (email: string) => db.query("DELETE FROM auth_codes WH
 /* ------------------------------------ friends and blocks ------------------------------------ */
 
 const pair = (x: string, y: string): [string, string] => (x < y ? [x, y] : [y, x]);
-export type FriendRow = { a: string; b: string; requester: string; status: "pending" | "accepted"; created_at: number };
+export type FriendRow = { a: string; b: string; requester: string; status: "pending" | "accepted"; created_at: number; level: string };
 
 export function getFriendship(x: string, y: string) {
   const [a, b] = pair(x, y);
   return one<FriendRow>("SELECT * FROM friendships WHERE a = $1 AND b = $2", [a, b]);
+}
+export async function setFriendLevel(x: string, y: string, level: string) {
+  const [a, b] = pair(x, y);
+  await db.query("UPDATE friendships SET level = $3 WHERE a = $1 AND b = $2 AND status = 'accepted'", [a, b, level]);
+}
+/** How many of this player's friendships are at one of these levels (leaving out one friend). */
+export async function countLevel(pid: string, levels: string[], exceptOther?: string) {
+  const rows = await db.query<FriendRow>("SELECT * FROM friendships WHERE (a = $1 OR b = $1) AND status = 'accepted'", [pid]);
+  return rows.filter((f) => levels.includes(f.level) && (f.a === pid ? f.b : f.a) !== exceptOther).length;
 }
 export const friendshipsOf = (pid: string) => db.query<FriendRow>("SELECT * FROM friendships WHERE a = $1 OR b = $1", [pid]);
 export function requestFriend(from: string, to: string) {

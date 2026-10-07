@@ -1,12 +1,20 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { cleanChat } from "../../src/lib/moderation";
-import { addBlock, addDm, acceptFriend, blockedEither, blocksOf, countFriends, dmThread, dmThreads, friendshipsOf, getDm, getFriendship, getPlayer, markRead, removeBlock, removeFriendship, requestFriend } from "../db/repo";
+import { addBlock, addDm, acceptFriend, blockedEither, countLevel, setFriendLevel, blocksOf, countFriends, dmThread, dmThreads, friendshipsOf, getDm, getFriendship, getPlayer, markRead, removeBlock, removeFriendship, requestFriend } from "../db/repo";
 import { isOnline, sendToPid } from "../presence";
 import { verifyToken } from "./auth";
 
 const clean = (s: unknown, max: number) => String(s ?? "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, max);
 const PID = /^[a-zA-Z0-9]{8,40}$/;
 const lastDm = new Map<string, number>();
+
+/** Closeness between two friends, lowest to highest. Going up needs the other person to agree; coming down does not. */
+export const LEVELS = ["friend", "bestie", "fwb", "babe", "wife"] as const;
+const rank = (l: string) => LEVELS.indexOf(l as (typeof LEVELS)[number]);
+const LABEL: Record<string, string> = { friend: "friend", bestie: "best friend", fwb: "friends with benefits", babe: "babe", wife: "wife" };
+const PARTNER = ["babe", "wife"];
+/** proposals waiting for an answer: "from|to" -> level and when */
+const asks = new Map<string, { level: string; at: number }>();
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | null> {
   const chunks: Buffer[] = [];
@@ -68,7 +76,7 @@ export async function handleSocial(req: IncomingMessage, res: ServerResponse, ur
       const other = f.a === me ? f.b : f.a;
       const info = await look(other);
       if (!info) continue;
-      if (f.status === "accepted") friends.push({ ...info, online: isOnline(other) });
+      if (f.status === "accepted") friends.push({ ...info, online: isOnline(other), level: f.level ?? "friend" });
       else if (f.requester === me) outgoing.push(info);
       else incoming.push(info);
     }
@@ -100,6 +108,46 @@ export async function handleSocial(req: IncomingMessage, res: ServerResponse, ur
       sendToPid(other, { t: "friendEvent", kind: "accepted", pid: me, name: (await getPlayer(me))?.name ?? "" });
     } else await removeFriendship(me, other);
     return send(200, { ok: true }), true;
+  }
+  if (req.method === "POST" && path === "/api/friends/level") {
+    const other = clean(body?.pid, 40);
+    const level = clean(body?.level, 12);
+    if (!PID.test(other) || rank(level) < 0) return send(400, { error: "Pick a friend and a level." }), true;
+    const f = await getFriendship(me, other);
+    if (f?.status !== "accepted") return send(400, { error: "You can only change this with a friend." }), true;
+    const cur = f.level ?? "friend";
+    const myName = (await getPlayer(me))?.name ?? "";
+    if (rank(level) <= rank(cur)) {
+      // coming down (or staying): no permission needed, the other person is told
+      await setFriendLevel(me, other, level);
+      sendToPid(other, { t: "relChanged", pid: me, name: myName, level, by: "them" });
+      return send(200, { status: "set", level }), true;
+    }
+    if (PARTNER.includes(level)) {
+      if ((await countLevel(me, PARTNER, other)) > 0) return send(400, { error: "You already have a partner. Move them back to friend first." }), true;
+      if ((await countLevel(other, PARTNER, me)) > 0) return send(400, { error: "They already have a partner." }), true;
+    }
+    if (level === "fwb" && ((await countLevel(me, ["fwb"], other)) >= 3 || (await countLevel(other, ["fwb"], me)) >= 3)) return send(400, { error: "That is too many already." }), true;
+    if (!isOnline(other)) return send(409, { error: "They need to be online to answer. Try again when they are." }), true;
+    asks.set(`${me}|${other}`, { level, at: Date.now() });
+    sendToPid(other, { t: "relAsk", from: me, name: myName, level });
+    return send(200, { status: "asked" }), true;
+  }
+  if (req.method === "POST" && path === "/api/friends/level/respond") {
+    const from = clean(body?.pid, 40);
+    const ask = asks.get(`${from}|${me}`);
+    if (!PID.test(from) || !ask || Date.now() - ask.at > 10 * 60_000) return send(400, { error: "That request has expired." }), true;
+    asks.delete(`${from}|${me}`);
+    const myName = (await getPlayer(me))?.name ?? "";
+    const f = await getFriendship(me, from);
+    if (!body?.accept || f?.status !== "accepted") {
+      sendToPid(from, { t: "relDeclined", pid: me, name: myName, level: ask.level });
+      return send(200, { status: "declined" }), true;
+    }
+    if (PARTNER.includes(ask.level) && ((await countLevel(me, PARTNER, from)) > 0 || (await countLevel(from, PARTNER, me)) > 0)) return send(400, { error: "One of you already has a partner." }), true;
+    await setFriendLevel(me, from, ask.level);
+    sendToPid(from, { t: "relChanged", pid: me, name: myName, level: ask.level, by: "accepted" });
+    return send(200, { status: "set", level: ask.level }), true;
   }
   if (req.method === "DELETE" && parts[1] === "friends" && parts.length === 3) {
     await removeFriendship(me, parts[2]);
@@ -155,7 +203,7 @@ export async function handleSocial(req: IncomingMessage, res: ServerResponse, ur
     const info = await look(parts[2]);
     if (!info) return send(404, { error: "not found" }), true;
     const f = await getFriendship(me, parts[2]);
-    return send(200, { ...info, online: isOnline(parts[2]), friendship: f ? (f.status === "accepted" ? "friends" : f.requester === me ? "sent" : "received") : "none", blocked: (await blocksOf(me)).includes(parts[2]) }), true;
+    return send(200, { ...info, online: isOnline(parts[2]), level: f?.status === "accepted" ? f.level : undefined, friendship: f ? (f.status === "accepted" ? "friends" : f.requester === me ? "sent" : "received") : "none", blocked: (await blocksOf(me)).includes(parts[2]) }), true;
   }
   return send(404, { error: "not found" }), true;
 }

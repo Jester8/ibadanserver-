@@ -1,0 +1,1 @@
+ALTER TABLE friendships ADD COLUMN IF NOT EXISTS level TEXT NOT NULL DEFAULT 'friend';
