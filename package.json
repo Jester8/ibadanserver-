@@ -1,0 +1,29 @@
+{
+  "name": "ibadanserver",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Omo Ibadan realtime + REST server",
+  "scripts": {
+    "start": "tsx server/index.ts",
+    "dev": "tsx watch server/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "livekit-server-sdk": "^2.19.1",
+    "nodemailer": "^10.0.15",
+    "pg": "^8.23.1",
+    "ws": "^8.22.0",
+    "tsx": "^4.23.15"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "@types/nodemailer": "^8.0.2",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "typescript": "^5"
+  }
+}

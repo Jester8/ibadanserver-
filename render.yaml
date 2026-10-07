@@ -1,0 +1,41 @@
+# Render Blueprint: one web service runs the REST API and the realtime WebSocket.
+# Secrets marked sync:false are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: omo-ibadan-server
+    runtime: node
+    plan: starter            # always on; the free plan sleeps and drops live players
+    region: frankfurt
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    numInstances: 1          # presence and rooms live in memory, so keep exactly one instance
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: REQUIRE_AUTH
+        value: "1"
+      - key: ALLOWED_ORIGINS
+        sync: false            # your Vercel URL, e.g. https://omo-ibadan.vercel.app
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: SMTP_URL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
