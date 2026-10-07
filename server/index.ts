@@ -87,6 +87,9 @@ setInterval(() => {
 const httpServer = createServer((req, res) => void handleHttp(req, res));
 const wss = new WebSocketServer({ server: httpServer, maxPayload: 1_000_000 });
 
+/** How many different players are online (not how many connections there are). */
+const onlineCount = () => new Set([...clients.values()].map((c) => c.info.pid)).size;
+
 wss.on("connection", (ws) => {
   const id = randomUUID().slice(0, 8);
   let client: Client | null = null;
@@ -122,6 +125,14 @@ wss.on("connection", (ws) => {
       };
       await touchPlayer(info.pid, info.name);
       if (!client) {
+        // one connection per player: opening the game again (a reload, a second tab, a reconnect) replaces the old one
+        for (const old of [...clients.values()]) {
+          if (old.info.pid !== info.pid || old.info.id === id) continue;
+          leaveVoice(old);
+          clients.delete(old.info.id);
+          broadcast({ t: "leave", id: old.info.id });
+          old.ws.close(4000, "opened elsewhere");
+        }
         client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
@@ -131,8 +142,8 @@ wss.on("connection", (ws) => {
         client.info = { ...client.info, name: info.name, look: info.look };
       }
       broadcast({ t: "join", peer: client.info }, id);
-      broadcast({ t: "online", n: clients.size });
-      tx(ws, { t: "online", n: clients.size });
+      broadcast({ t: "online", n: onlineCount() });
+      tx(ws, { t: "online", n: onlineCount() });
       return;
     }
     if (!client) return;
@@ -425,7 +436,7 @@ wss.on("connection", (ws) => {
     clients.delete(id);
     if (c.verified && !isOnline(c.info.pid)) void tellFriends(c.info.pid, false);
     broadcast({ t: "leave", id });
-    broadcast({ t: "online", n: clients.size });
+    broadcast({ t: "online", n: onlineCount() });
   });
 });
 
