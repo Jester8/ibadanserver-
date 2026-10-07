@@ -1,8 +1,10 @@
 import { WebSocket } from "ws";
 import type { PeerInfo, S2C } from "../src/lib/protocol";
 
+import type { Seat } from "../src/lib/protocol";
+
 export type Client = { ws: WebSocket; info: PeerInfo; moved: boolean; speed: number; voiceRoom: string | null; lastChat: number;
-  lastPhoto: number; verified: boolean };
+  lastPhoto: number; sit: Seat | null; verified: boolean };
 
 /** Everyone connected right now, by connection id. Shared by the websocket handlers and the REST routes. */
 export const clients = new Map<string, Client>();

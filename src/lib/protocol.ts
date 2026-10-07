@@ -34,6 +34,9 @@ export type PeerInfo = {
   car?: { id: string; color: string } | null;
 };
 
+/** Where someone is seated or lying down on furniture, so everyone in the room sees them settle in. */
+export type Seat = { pose: "sit" | "lie"; x: number; z: number; ry: number; seatH: number };
+
 export type C2S =
   | { t: "hello"; pid: string; name: string; look: Look; token?: string }
   | { t: "move"; x: number; z: number; ry: number; s: number }
@@ -51,6 +54,7 @@ export type C2S =
   | { t: "car"; car: { id: string; color: string } | null }
   | { t: "dm"; to: string; text: string }
   | { t: "photo"; data: string }
+  | { t: "sit"; u: Seat | null }
   | { t: "run"; slogan: string }
   | { t: "vote"; pid: string }
   | { t: "policy"; policy: Policy };
@@ -79,4 +83,5 @@ export type S2C =
   | { t: "presence"; pid: string; online: boolean }
   | { t: "dmError"; error: string }
   | { t: "photo"; photoId: string; from: string; name: string; data: string }
+  | { t: "sit"; id: string; u: Seat | null }
   | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };

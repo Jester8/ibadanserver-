@@ -120,7 +120,7 @@ wss.on("connection", (ws) => {
       };
       await touchPlayer(info.pid, info.name);
       if (!client) {
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, verified };
+        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, sit: null, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
@@ -145,8 +145,15 @@ wss.on("connection", (ws) => {
         c.moved = true;
         break;
       case "room": {
+        // changing rooms means standing up where you were
+        if (c.sit) {
+          for (const other of clients.values()) if (other.info.id !== id && other.info.room === c.info.room) tx(other.ws, { t: "sit", id, u: null });
+          c.sit = null;
+        }
         c.info.room = clean(m.room, 40) || "streets";
         broadcast({ t: "join", peer: c.info }, id);
+        // show the newcomer who is already sitting here
+        for (const other of clients.values()) if (other.info.id !== id && other.info.room === c.info.room && other.sit) tx(ws, { t: "sit", id: other.info.id, u: other.sit });
         // show what was said here recently, minus anyone you have blocked
         const mine = c.info.pid;
         const hidden = new Set(await blocksOf(mine));
@@ -166,6 +173,13 @@ wss.on("connection", (ws) => {
           if (other.info.id !== id && (await blockedEither(c.info.pid, other.info.pid))) continue; // blocked either way: not delivered
           tx(other.ws, msg);
         }
+        break;
+      }
+      case "sit": {
+        const u = m.u;
+        const ok = u && (u.pose === "sit" || u.pose === "lie") && [u.x, u.z, u.ry, u.seatH].every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) < 500);
+        c.sit = ok ? { pose: u.pose, x: u.x, z: u.z, ry: u.ry, seatH: u.seatH } : null;
+        for (const other of clients.values()) if (other.info.id !== id && other.info.room === c.info.room) tx(other.ws, { t: "sit", id, u: c.sit });
         break;
       }
       case "photo": {
