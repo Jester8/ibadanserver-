@@ -8,6 +8,8 @@ export type PlotState = {
   collectedAt: number;
   /** decor ids placed in the house, visible to every visitor */
   decor?: string[];
+  /** a business built on this land instead of a house (see business.ts) */
+  biz?: string;
 };
 
 export type Policy = "none" | "transport" | "food" | "wages";

@@ -9,21 +9,21 @@ const one = async <T,>(sql: string, params: unknown[] = []) => (await db.query<T
 
 /* ------------------------------------ land ------------------------------------ */
 
-type PlotRow = { plot_id: string; owner_pid: string; owner_name: string; tier: number; collected_at: number; decor_json: string | null };
+type PlotRow = { plot_id: string; owner_pid: string; owner_name: string; tier: number; collected_at: number; decor_json: string | null; biz: string | null };
 
 export async function loadPlots(): Promise<Record<string, PlotState>> {
   const out: Record<string, PlotState> = {};
   for (const r of await db.query<PlotRow>("SELECT * FROM plots")) {
-    out[r.plot_id] = { ownerId: r.owner_pid, ownerName: r.owner_name, tier: r.tier, collectedAt: r.collected_at, decor: r.decor_json ? JSON.parse(r.decor_json) : undefined };
+    out[r.plot_id] = { ownerId: r.owner_pid, ownerName: r.owner_name, tier: r.tier, collectedAt: r.collected_at, decor: r.decor_json ? JSON.parse(r.decor_json) : undefined, biz: r.biz ?? undefined };
   }
   return out;
 }
 
 export async function savePlot(id: string, p: PlotState) {
   await db.query(
-    `INSERT INTO plots (plot_id, owner_pid, owner_name, tier, collected_at, decor_json) VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (plot_id) DO UPDATE SET owner_pid = EXCLUDED.owner_pid, owner_name = EXCLUDED.owner_name, tier = EXCLUDED.tier, collected_at = EXCLUDED.collected_at, decor_json = EXCLUDED.decor_json`,
-    [id, p.ownerId, p.ownerName, p.tier, p.collectedAt, p.decor ? JSON.stringify(p.decor) : null],
+    `INSERT INTO plots (plot_id, owner_pid, owner_name, tier, collected_at, decor_json, biz) VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (plot_id) DO UPDATE SET owner_pid = EXCLUDED.owner_pid, owner_name = EXCLUDED.owner_name, tier = EXCLUDED.tier, collected_at = EXCLUDED.collected_at, decor_json = EXCLUDED.decor_json, biz = EXCLUDED.biz`,
+    [id, p.ownerId, p.ownerName, p.tier, p.collectedAt, p.decor ? JSON.stringify(p.decor) : null, p.biz ?? null],
   );
 }
 

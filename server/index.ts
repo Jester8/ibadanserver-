@@ -201,6 +201,7 @@ wss.on("connection", (ws) => {
           tier: Math.max(0, Math.min(3, Math.floor(num(m.plot.tier)))),
           collectedAt: num(m.plot.collectedAt, Date.now()),
           decor: Array.isArray(m.plot.decor) ? m.plot.decor.filter((d) => typeof d === "string" && /^[a-z0-9]{1,20}$/.test(d)).slice(0, 21) : existing?.decor,
+          biz: typeof m.plot.biz === "string" && /^[a-z0-9]{1,20}$/.test(m.plot.biz) ? m.plot.biz : undefined,
         };
         plots[m.plotId] = plot;
         await savePlot(m.plotId, plot);
