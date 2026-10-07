@@ -10,6 +10,8 @@ export type PlotState = {
   decor?: string[];
   /** a business built on this land instead of a house (see business.ts) */
   biz?: string;
+  /** who may come in: "ask" (the owner is asked each time), "friends" (friends walk straight in), "closed" */
+  visit?: "ask" | "friends" | "closed";
 };
 
 export type Policy = "none" | "transport" | "food" | "wages";
@@ -55,6 +57,8 @@ export type C2S =
   | { t: "dm"; to: string; text: string }
   | { t: "photo"; data: string }
   | { t: "sit"; u: Seat | null }
+  | { t: "knock"; plotId: string }
+  | { t: "knockReply"; to: string; plotId: string; allow: boolean }
   | { t: "run"; slogan: string }
   | { t: "vote"; pid: string }
   | { t: "policy"; policy: Policy };
@@ -84,4 +88,6 @@ export type S2C =
   | { t: "dmError"; error: string }
   | { t: "photo"; photoId: string; from: string; name: string; data: string }
   | { t: "sit"; id: string; u: Seat | null }
+  | { t: "knock"; from: string; name: string; plotId: string }
+  | { t: "knockResult"; plotId: string; allow: boolean; reason?: string }
   | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };

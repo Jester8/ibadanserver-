@@ -27,6 +27,8 @@ const ready = (async () => {
 })();
 
 const voiceRooms = new Map<string, Set<string>>();
+/** visitors the owner let in: "visitorPid|plotId" -> until when. Kept in memory, 30 minutes each. */
+const grants = new Map<string, number>();
 
 const clean = (s: unknown, max: number) => String(s ?? "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, max);
 const num = (n: unknown, fallback = 0) => (typeof n === "number" && Number.isFinite(n) ? n : fallback);
@@ -120,7 +122,7 @@ wss.on("connection", (ws) => {
       };
       await touchPlayer(info.pid, info.name);
       if (!client) {
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, sit: null, verified };
+        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
@@ -175,6 +177,47 @@ wss.on("connection", (ws) => {
         }
         break;
       }
+      case "knock": {
+        // a visitor asks to come into a home: the owner decides (or has already decided in their door setting)
+        const plot = plots[m.plotId];
+        const now = Date.now();
+        const result = (allow: boolean, reason?: string): void => {
+          tx(ws, { t: "knockResult", plotId: m.plotId, allow, reason });
+        };
+        if (!plot || plot.tier < 1 || plot.biz) return result(false, "Nobody lives there.");
+        if (plot.ownerId === c.info.pid) return result(true);
+        const grant = grants.get(`${c.info.pid}|${m.plotId}`);
+        if (grant && grant > now) return result(true);
+        if (await blockedEither(c.info.pid, plot.ownerId)) return result(false, "The door stays shut.");
+        const mode = plot.visit ?? "ask";
+        if (mode === "closed") return result(false, "The door is closed. They are not taking visitors.");
+        if (mode === "friends") {
+          if ((await friendshipsOf(plot.ownerId)).some((f) => f.status === "accepted" && (f.a === c.info.pid || f.b === c.info.pid))) {
+            grants.set(`${c.info.pid}|${m.plotId}`, now + 30 * 60_000);
+            return result(true);
+          }
+          return result(false, "Only their friends can come in.");
+        }
+        if (now - c.lastKnock < 4000) return;
+        c.lastKnock = now;
+        let asked = 0;
+        for (const o of clients.values()) {
+          if (o.info.pid === plot.ownerId) {
+            tx(o.ws, { t: "knock", from: id, name: c.info.name, plotId: m.plotId });
+            asked++;
+          }
+        }
+        if (!asked) return result(false, "They are not home right now.");
+        break;
+      }
+      case "knockReply": {
+        const plot = plots[m.plotId];
+        const visitor = clients.get(m.to);
+        if (!plot || plot.ownerId !== c.info.pid || !visitor) return;
+        if (m.allow) grants.set(`${visitor.info.pid}|${m.plotId}`, Date.now() + 30 * 60_000);
+        tx(visitor.ws, { t: "knockResult", plotId: m.plotId, allow: !!m.allow, reason: m.allow ? undefined : "They cannot have visitors right now." });
+        break;
+      }
       case "sit": {
         const u = m.u;
         const ok = u && (u.pose === "sit" || u.pose === "lie") && [u.x, u.z, u.ry, u.seatH].every((n) => typeof n === "number" && Number.isFinite(n) && Math.abs(n) < 500);
@@ -215,6 +258,7 @@ wss.on("connection", (ws) => {
           tier: Math.max(0, Math.min(3, Math.floor(num(m.plot.tier)))),
           collectedAt: num(m.plot.collectedAt, Date.now()),
           decor: Array.isArray(m.plot.decor) ? m.plot.decor.filter((d) => typeof d === "string" && /^[a-z0-9]{1,20}$/.test(d)).slice(0, 21) : existing?.decor,
+          visit: m.plot.visit === "friends" || m.plot.visit === "closed" ? m.plot.visit : existing?.visit ?? "ask",
           biz: typeof m.plot.biz === "string" && /^[a-z0-9]{1,20}$/.test(m.plot.biz) ? m.plot.biz : undefined,
         };
         plots[m.plotId] = plot;
