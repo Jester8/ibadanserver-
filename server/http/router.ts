@@ -77,6 +77,10 @@ const routes: Record<string, Handler> = {
     const signup = b.purpose === "signup";
     const exists = await getPlayerByEmail(email);
     if (signup && exists) return { status: 409, json: { error: "That email already has an account. Log in instead." } };
+    if (!config.emailCodes) {
+      if (!signup && !exists) return { status: 404, json: { error: "No account with that email yet. Sign up first." } };
+      return { json: { ok: true, skip: true, cooldown: 0 } };
+    }
     const ip = String(req.socket.remoteAddress);
     const ipHit = ipCodes.get(ip);
     const nowMs = Date.now();
@@ -104,14 +108,17 @@ const routes: Record<string, Handler> = {
     const b = (body ?? {}) as { email?: unknown; code?: unknown; name?: unknown; look?: unknown };
     const email = String(b.email ?? "").trim().toLowerCase();
     const code = String(b.code ?? "").trim();
-    const row = await getCode(email);
-    if (!row || Date.now() > row.expires_at) return { status: 400, json: { error: "That code has expired. Ask for a new one." } };
-    if (row.attempts >= 5) return { status: 429, json: { error: "Too many wrong tries. Ask for a new code." } };
-    if (!/^\d{6}$/.test(code) || !same(row.code_hash, hashCode(email, code))) {
-      await bumpAttempts(email);
-      return { status: 401, json: { error: "That code is not right." } };
+    if (!EMAIL.test(email) || email.length > 80) return { status: 400, json: { error: "Enter a valid email address." } };
+    if (config.emailCodes) {
+      const row = await getCode(email);
+      if (!row || Date.now() > row.expires_at) return { status: 400, json: { error: "That code has expired. Ask for a new one." } };
+      if (row.attempts >= 5) return { status: 429, json: { error: "Too many wrong tries. Ask for a new code." } };
+      if (!/^\d{6}$/.test(code) || !same(row.code_hash, hashCode(email, code))) {
+        await bumpAttempts(email);
+        return { status: 401, json: { error: "That code is not right." } };
+      }
+      await deleteCode(email);
     }
-    await deleteCode(email);
     const existing = await getPlayerByEmail(email);
     if (existing) {
       return { json: { isNew: false, pid: existing.pid, name: existing.name, look: existing.profile_json ? JSON.parse(existing.profile_json) : null, token: issueToken(existing.pid) } };

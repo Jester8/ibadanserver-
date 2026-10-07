@@ -14,6 +14,8 @@ export const config = {
   requireAuth: process.env.REQUIRE_AUTH === "1",
   origins: list(process.env.ALLOWED_ORIGINS, "http://localhost:3000,http://localhost:3100"),
   production: process.env.NODE_ENV === "production",
+  /** 0 = no emailed codes for now: sign up just collects name + email, log in needs only the email. Set 1 to require codes. */
+  emailCodes: process.env.EMAIL_CODES !== "0",
   /** e.g. smtps://user:pass@smtp.example.com:465 . Without it, codes are only printed to the server log (development). */
   smtpUrl: process.env.SMTP_URL ?? "",
   mailFrom: process.env.MAIL_FROM ?? "Omo Ibadan <no-reply@omoibadan.app>",
