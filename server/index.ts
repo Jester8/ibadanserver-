@@ -177,6 +177,23 @@ wss.on("connection", (ws) => {
         }
         break;
       }
+      case "claimStarter": {
+        // every new player is given a bungalow in one of the estates: the first free plot among the ones the client suggests
+        const mine = Object.entries(plots).find(([, p]) => p.ownerId === c.info.pid);
+        if (mine) {
+          tx(ws, { t: "starterHome", plotId: mine[0] });
+          return;
+        }
+        const ok = /^(bodija-estate|jericho-gra|oluyole-estate|iyaganku-heights)-([1-9]|[1-3][0-9]|40)$/;
+        const pick = (Array.isArray(m.candidates) ? m.candidates : []).slice(0, 40).find((pid) => typeof pid === "string" && ok.test(pid) && !plots[pid]);
+        if (!pick) return;
+        const plot: PlotState = { ownerId: c.info.pid, ownerName: clean(c.info.name, 16), tier: 1, collectedAt: Date.now(), visit: "ask" };
+        plots[pick] = plot;
+        await savePlot(pick, plot);
+        broadcast({ t: "plot", plotId: pick, plot });
+        tx(ws, { t: "starterHome", plotId: pick });
+        break;
+      }
       case "knock": {
         // a visitor asks to come into a home: the owner decides (or has already decided in their door setting)
         const plot = plots[m.plotId];

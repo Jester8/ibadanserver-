@@ -58,6 +58,7 @@ export type C2S =
   | { t: "photo"; data: string }
   | { t: "sit"; u: Seat | null }
   | { t: "knock"; plotId: string }
+  | { t: "claimStarter"; candidates: string[] }
   | { t: "knockReply"; to: string; plotId: string; allow: boolean }
   | { t: "run"; slogan: string }
   | { t: "vote"; pid: string }
@@ -90,4 +91,5 @@ export type S2C =
   | { t: "sit"; id: string; u: Seat | null }
   | { t: "knock"; from: string; name: string; plotId: string }
   | { t: "knockResult"; plotId: string; allow: boolean; reason?: string }
+  | { t: "starterHome"; plotId: string }
   | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };
