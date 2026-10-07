@@ -206,3 +206,21 @@ export const countRecentTracks = async (pid: string, since: number) => (await on
 export const setTrackFile = (id: string, file: string, mime: string, size: number) => db.query("UPDATE tracks SET file = $1, mime = $2, size = $3, status = 'pending' WHERE id = $4", [file, mime, size, id]);
 export const reviewTrack = (id: string, status: "approved" | "rejected", note: string) => db.query("UPDATE tracks SET status = $1, review_note = $2, reviewed_at = $3 WHERE id = $4", [status, note, Date.now(), id]);
 export const deleteTrackRow = (id: string) => db.query("DELETE FROM tracks WHERE id = $1", [id]);
+
+/* ---------------------------------- bank transfers ---------------------------------- */
+
+export type TransferRow = { id: number; from_pid: string; to_pid: string; amount: number; note: string; at: number; claimed: number };
+
+export async function addTransfer(from: string, to: string, amount: number, note: string) {
+  const r = await db.query<{ id: number }>("INSERT INTO transfers (from_pid, to_pid, amount, note, at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [from, to, amount, note, Date.now()]);
+  return r[0].id;
+}
+export const sentSince = async (pid: string, since: number) => Number((await db.query<{ n: string | null }>("SELECT COALESCE(SUM(amount), 0) AS n FROM transfers WHERE from_pid = $1 AND at > $2", [pid, since]))[0]?.n ?? 0);
+export const pendingFor = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE to_pid = $1 AND claimed = 0 ORDER BY id LIMIT 50", [pid]);
+/** Marks a credit as received. True only the first time, so money is added exactly once. */
+export async function claimTransfer(id: number, pid: string) {
+  const r = await db.query<{ id: number }>("UPDATE transfers SET claimed = 1 WHERE id = $1 AND to_pid = $2 AND claimed = 0 RETURNING id", [id, pid]);
+  return r.length > 0;
+}
+export const getTransfer = (id: number) => one<TransferRow>("SELECT * FROM transfers WHERE id = $1", [id]);
+export const transfersOf = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE from_pid = $1 OR to_pid = $1 ORDER BY id DESC LIMIT 25", [pid]);

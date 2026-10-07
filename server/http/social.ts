@@ -33,7 +33,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown> |
 
 const look = async (pid: string) => {
   const p = await getPlayer(pid);
-  return p ? { pid: p.pid, name: p.name, look: p.profile_json ? JSON.parse(p.profile_json) : null } : null;
+  return p ? { pid: p.pid, name: p.name, username: p.username, look: p.profile_json ? JSON.parse(p.profile_json) : null } : null;
 };
 
 export type DmOut = { id: number; from: string; to: string; text: string; at: number };
