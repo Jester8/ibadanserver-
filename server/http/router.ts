@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { config } from "../config";
-import { bumpAttempts, createVerifiedPlayer, deleteCode, getCode, getPlayer, getPlayerByEmail, getState, putState, saveCode, touchPlayer } from "../db/repo";
+import { bumpAttempts, createVerifiedPlayer, deleteCode, getCode, getPlayer, getPlayerByEmail, getPlayerByUsername, getState, putState, saveCode, touchPlayer } from "../db/repo";
 import { issueToken, turnCredential, verifyToken } from "./auth";
 import { createHmac, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import { sendCode } from "../mail";
@@ -14,6 +14,14 @@ type Handler = (ctx: { req: IncomingMessage; body: unknown; pid: string | null; 
 
 const ipCodes = new Map<string, { n: number; until: number }>();
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const USERNAME = /^[a-z0-9_]{3,16}$/i;
+const USERNAME_HELP = "Choose a username: 3 to 16 letters, numbers or underscores.";
+
+/** Log in accepts an email or a username. Returns the account email, or null when there is no such account. */
+async function emailFor(ident: string): Promise<string | null> {
+  if (ident.includes("@")) return ident;
+  return (await getPlayerByUsername(ident))?.email ?? null;
+}
 const hashCode = (email: string, code: string) => createHmac("sha256", config.authSecret).update(`${email}:${code}`).digest("hex");
 const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const hits = new Map<string, { n: number; reset: number }>();
@@ -71,12 +79,23 @@ const routes: Record<string, Handler> = {
    * Log in never reveals whether an address has an account.
    */
   "POST /api/auth/request-code": async ({ body, req }) => {
-    const b = (body ?? {}) as { email?: unknown; purpose?: unknown };
-    const email = String(b.email ?? "").trim().toLowerCase();
-    if (!EMAIL.test(email) || email.length > 80) return { status: 400, json: { error: "Enter a valid email address." } };
+    const b = (body ?? {}) as { email?: unknown; purpose?: unknown; username?: unknown };
+    const ident = String(b.email ?? "").trim().toLowerCase();
     const signup = b.purpose === "signup";
+    if (!signup && ident && !ident.includes("@")) {
+      // logging in with a username
+      const found = await emailFor(ident);
+      if (!found) return config.emailCodes ? { json: { ok: true, cooldown: 30 } } : { status: 404, json: { error: "No account with that username yet. Sign up first." } };
+    }
+    const email = (signup ? ident : await emailFor(ident)) ?? ident;
+    if (!EMAIL.test(email) || email.length > 80) return { status: 400, json: { error: "Enter a valid email address or username." } };
     const exists = await getPlayerByEmail(email);
     if (signup && exists) return { status: 409, json: { error: "That email already has an account. Log in instead." } };
+    if (signup) {
+      const u = String(b.username ?? "").trim();
+      if (!USERNAME.test(u)) return { status: 400, json: { error: USERNAME_HELP } };
+      if (await getPlayerByUsername(u)) return { status: 409, json: { error: "That username is taken. Try another." } };
+    }
     if (!config.emailCodes) {
       if (!signup && !exists) return { status: 404, json: { error: "No account with that email yet. Sign up first." } };
       return { json: { ok: true, skip: true, cooldown: 0 } };
@@ -105,8 +124,9 @@ const routes: Record<string, Handler> = {
 
   /** Step 2: check the code. An existing email logs in; a new one creates the account (name + avatar). */
   "POST /api/auth/verify": async ({ body }) => {
-    const b = (body ?? {}) as { email?: unknown; code?: unknown; name?: unknown; look?: unknown };
-    const email = String(b.email ?? "").trim().toLowerCase();
+    const b = (body ?? {}) as { email?: unknown; code?: unknown; name?: unknown; look?: unknown; username?: unknown };
+    const ident = String(b.email ?? "").trim().toLowerCase();
+    const email = (await emailFor(ident)) ?? ident;
     const code = String(b.code ?? "").trim();
     if (!EMAIL.test(email) || email.length > 80) return { status: 400, json: { error: "Enter a valid email address." } };
     if (config.emailCodes) {
@@ -121,13 +141,16 @@ const routes: Record<string, Handler> = {
     }
     const existing = await getPlayerByEmail(email);
     if (existing) {
-      return { json: { isNew: false, pid: existing.pid, name: existing.name, look: existing.profile_json ? JSON.parse(existing.profile_json) : null, token: issueToken(existing.pid) } };
+      return { json: { isNew: false, pid: existing.pid, name: existing.name, username: existing.username, email: existing.email, look: existing.profile_json ? JSON.parse(existing.profile_json) : null, token: issueToken(existing.pid) } };
     }
     const name = String(b.name ?? "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 16);
     if (name.length < 2) return { status: 400, json: { error: "Choose a name (2 to 16 characters)." } };
+    const username = String(b.username ?? "").trim();
+    if (!USERNAME.test(username)) return { status: 400, json: { error: USERNAME_HELP } };
+    if (await getPlayerByUsername(username)) return { status: 409, json: { error: "That username is taken. Try another." } };
     const pid = randomUUID().replace(/-/g, "").slice(0, 20);
-    await createVerifiedPlayer(pid, name, email, b.look && typeof b.look === "object" ? b.look : null);
-    return { json: { isNew: true, pid, name, look: b.look ?? null, token: issueToken(pid) } };
+    await createVerifiedPlayer(pid, name, email, b.look && typeof b.look === "object" ? b.look : null, username);
+    return { json: { isNew: true, pid, name, username, email, look: b.look ?? null, token: issueToken(pid) } };
   },
 
   /** Voice relay settings: STUN, plus TURN with short-lived credentials when configured. */

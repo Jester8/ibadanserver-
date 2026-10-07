@@ -39,8 +39,10 @@ export async function importLegacyPlots(dir: string) {
 
 /* ------------------------------------ players ------------------------------------ */
 
-export type PlayerRow = { pid: string; name: string; email: string | null; email_verified: number; profile_json: string | null };
-const PLAYER = "pid, name, email, email_verified, profile_json";
+export type PlayerRow = { pid: string; name: string; username: string | null; email: string | null; email_verified: number; profile_json: string | null };
+const PLAYER = "pid, name, username, email, email_verified, profile_json";
+
+export const getPlayerByUsername = (username: string) => one<PlayerRow>(`SELECT ${PLAYER} FROM players WHERE LOWER(username) = LOWER($1)`, [username]);
 
 export async function touchPlayer(pid: string, name: string) {
   const now = Date.now();
@@ -55,9 +57,9 @@ export const getPlayer = (pid: string) => one<PlayerRow>(`SELECT ${PLAYER} FROM 
 export const getPlayerByEmail = (email: string) => one<PlayerRow>(`SELECT ${PLAYER} FROM players WHERE email = $1`, [email]);
 export const hasEmail = async (pid: string) => !!(await one<{ email: string | null }>("SELECT email FROM players WHERE pid = $1", [pid]))?.email;
 
-export async function createVerifiedPlayer(pid: string, name: string, email: string, look: unknown) {
+export async function createVerifiedPlayer(pid: string, name: string, email: string, look: unknown, username: string | null = null) {
   const now = Date.now();
-  await db.query("INSERT INTO players (pid, name, created_at, last_seen, email, email_verified, profile_json) VALUES ($1, $2, $3, $3, $4, 1, $5)", [pid, name, now, email, look ? JSON.stringify(look) : null]);
+  await db.query("INSERT INTO players (pid, name, created_at, last_seen, email, email_verified, profile_json, username) VALUES ($1, $2, $3, $3, $4, 1, $5, $6)", [pid, name, now, email, look ? JSON.stringify(look) : null, username]);
 }
 
 export async function getState(pid: string): Promise<{ state: unknown; updatedAt: number } | null> {
