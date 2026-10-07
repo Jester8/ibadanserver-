@@ -53,7 +53,7 @@ export function sanitizeState(s: unknown) {
   return {
     money: clamp(o.money, 0, 1e9),
     rep: clamp(o.rep, 0, 1e6),
-    needs: { hunger: clamp(needs.hunger, 0, 100), energy: clamp(needs.energy, 0, 100), fun: clamp(needs.fun, 0, 100), social: clamp(needs.social, 0, 100) },
+    needs: { hunger: clamp(needs.hunger, 0, 100), energy: clamp(needs.energy, 0, 100), fun: clamp(needs.fun, 0, 100), social: clamp(needs.social, 0, 100), bladder: clamp(needs.bladder, 0, 100, 80), hygiene: clamp(needs.hygiene, 0, 100, 80) },
     questsDone: strs(o.questsDone, 64),
     cars: strs(o.cars, 8),
     activeCar: typeof o.activeCar === "string" && /^[\w-]{1,24}$/.test(o.activeCar) ? o.activeCar : null,
