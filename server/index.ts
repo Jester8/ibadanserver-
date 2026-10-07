@@ -247,6 +247,10 @@ wss.on("connection", (ws) => {
         tx(visitor.ws, { t: "knockResult", plotId: m.plotId, allow: !!m.allow, reason: m.allow ? undefined : "They cannot have visitors right now." });
         break;
       }
+      case "ping":
+        // lets the player see a weak connection: the answer comes straight back
+        tx(ws, { t: "pong", at: typeof m.at === "number" ? m.at : Date.now() });
+        break;
       case "typing": {
         // "is typing...": to a friend in a chat, or to everyone in the room
         const now = Date.now();

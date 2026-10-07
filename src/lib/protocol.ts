@@ -60,6 +60,7 @@ export type C2S =
   | { t: "knock"; plotId: string }
   | { t: "doing"; label: string | null }
   | { t: "typing"; to?: string }
+  | { t: "ping"; at: number }
   | { t: "serve"; to: string; dish: string }
   | { t: "serveReply"; to: string; dish: string; accept: boolean }
   | { t: "claimStarter"; candidates: string[] }
@@ -102,6 +103,7 @@ export type S2C =
   | { t: "starterHome"; plotId: string }
   | { t: "doing"; id: string; label: string | null }
   | { t: "typing"; from: string; name: string; dm: boolean }
+  | { t: "pong"; at: number }
   | { t: "served"; from: string; name: string; dish: string }
   | { t: "serveResult"; from: string; name: string; dish: string; accept: boolean }
   | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };
