@@ -10,7 +10,7 @@ import { WebSocketServer, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import { config } from "./config";
 import { db, migrate } from "./db";
-import { addReport, addRoomMessage, blockedEither, blocksOf, friendshipsOf, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
+import { addReport, addRoomMessage, blockedEither, blocksOf, friendshipsOf, getFriendship, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
 import { handleHttp } from "./http/router";
 import { broadcast, clients, isOnline, sendToPid, tx, type Client } from "./presence";
 import { sendDm } from "./http/social";
@@ -122,7 +122,7 @@ wss.on("connection", (ws) => {
       };
       await touchPlayer(info.pid, info.name);
       if (!client) {
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, doing: null, verified };
+        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
@@ -245,6 +245,36 @@ wss.on("connection", (ws) => {
         if (!plot || plot.ownerId !== c.info.pid || !visitor) return;
         if (m.allow) grants.set(`${visitor.info.pid}|${m.plotId}`, Date.now() + 30 * 60_000);
         tx(visitor.ws, { t: "knockResult", plotId: m.plotId, allow: !!m.allow, reason: m.allow ? undefined : "They cannot have visitors right now." });
+        break;
+      }
+      case "typing": {
+        // "is typing...": to a friend in a chat, or to everyone in the room
+        const now = Date.now();
+        if (now - c.lastTyping < 1500) return;
+        c.lastTyping = now;
+        if (typeof m.to === "string" && m.to) {
+          const f = await getFriendship(c.info.pid, m.to);
+          if (f?.status === "accepted") sendToPid(m.to, { t: "typing", from: c.info.pid, name: c.info.name, dm: true });
+        } else {
+          for (const other of clients.values()) if (other.info.id !== id && other.info.room === c.info.room) tx(other.ws, { t: "typing", from: id, name: c.info.name, dm: false });
+        }
+        break;
+      }
+      case "serve": {
+        // a host serves a guest in the same room; the guest decides whether to eat
+        const now = Date.now();
+        const guest = clients.get(m.to);
+        const dish = clean(m.dish, 40);
+        if (!guest || !dish || guest.info.room !== c.info.room || now - c.lastServe < 3000) return;
+        if (await blockedEither(c.info.pid, guest.info.pid)) return;
+        c.lastServe = now;
+        tx(guest.ws, { t: "served", from: id, name: c.info.name, dish });
+        break;
+      }
+      case "serveReply": {
+        const host = clients.get(m.to);
+        if (!host || host.info.room !== c.info.room) return;
+        tx(host.ws, { t: "serveResult", from: id, name: c.info.name, dish: clean(m.dish, 40), accept: !!m.accept });
         break;
       }
       case "doing": {

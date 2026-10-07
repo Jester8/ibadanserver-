@@ -59,6 +59,9 @@ export type C2S =
   | { t: "sit"; u: Seat | null }
   | { t: "knock"; plotId: string }
   | { t: "doing"; label: string | null }
+  | { t: "typing"; to?: string }
+  | { t: "serve"; to: string; dish: string }
+  | { t: "serveReply"; to: string; dish: string; accept: boolean }
   | { t: "claimStarter"; candidates: string[] }
   | { t: "knockReply"; to: string; plotId: string; allow: boolean }
   | { t: "run"; slogan: string }
@@ -97,4 +100,7 @@ export type S2C =
   | { t: "knockResult"; plotId: string; allow: boolean; reason?: string }
   | { t: "starterHome"; plotId: string }
   | { t: "doing"; id: string; label: string | null }
+  | { t: "typing"; from: string; name: string; dm: boolean }
+  | { t: "served"; from: string; name: string; dish: string }
+  | { t: "serveResult"; from: string; name: string; dish: string; accept: boolean }
   | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };
