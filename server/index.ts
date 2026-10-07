@@ -83,7 +83,7 @@ setInterval(() => {
 }, 3000);
 
 const httpServer = createServer((req, res) => void handleHttp(req, res));
-const wss = new WebSocketServer({ server: httpServer });
+const wss = new WebSocketServer({ server: httpServer, maxPayload: 1_000_000 });
 
 wss.on("connection", (ws) => {
   const id = randomUUID().slice(0, 8);
@@ -120,7 +120,7 @@ wss.on("connection", (ws) => {
       };
       await touchPlayer(info.pid, info.name);
       if (!client) {
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, verified };
+        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
@@ -164,6 +164,20 @@ wss.on("connection", (ws) => {
         for (const other of clients.values()) {
           if (other.info.room !== c.info.room) continue;
           if (other.info.id !== id && (await blockedEither(c.info.pid, other.info.pid))) continue; // blocked either way: not delivered
+          tx(other.ws, msg);
+        }
+        break;
+      }
+      case "photo": {
+        // a view-once picture for everyone on this call or voice room. Relayed straight through and never stored.
+        const now = Date.now();
+        const data = typeof m.data === "string" ? m.data : "";
+        if (!c.voiceRoom || !data.startsWith("data:image/jpeg;base64,") || data.length > 450_000 || now - c.lastPhoto < 4000) return;
+        c.lastPhoto = now;
+        const msg: S2C = { t: "photo", photoId: randomUUID(), from: id, name: c.info.name, data };
+        for (const other of clients.values()) {
+          if (other.info.id === id || other.voiceRoom !== c.voiceRoom) continue;
+          if (await blockedEither(c.info.pid, other.info.pid)) continue;
           tx(other.ws, msg);
         }
         break;
