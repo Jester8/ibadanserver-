@@ -7,12 +7,14 @@ import { sendCode } from "../mail";
 import { handleSocial } from "./social";
 import { handleTracks } from "./tracks";
 import { handleIntro } from "./intro";
+import { checkPassword, hashPassword, passwordOk, PASSWORD_HELP } from "./password";
 import { AccessToken } from "livekit-server-sdk";
 import { clients } from "../presence";
 
 type Handler = (ctx: { req: IncomingMessage; body: unknown; pid: string | null; url: URL }) => { status?: number; json: unknown } | Promise<{ status?: number; json: unknown }>;
 
 const ipCodes = new Map<string, { n: number; until: number }>();
+const failedLogins = new Map<string, { n: number; until: number }>();
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const USERNAME = /^[a-z0-9_]{3,16}$/i;
 const USERNAME_HELP = "Choose a username: 3 to 16 letters, numbers or underscores.";
@@ -124,7 +126,7 @@ const routes: Record<string, Handler> = {
 
   /** Step 2: check the code. An existing email logs in; a new one creates the account (name + avatar). */
   "POST /api/auth/verify": async ({ body }) => {
-    const b = (body ?? {}) as { email?: unknown; code?: unknown; name?: unknown; look?: unknown; username?: unknown };
+    const b = (body ?? {}) as { email?: unknown; code?: unknown; name?: unknown; look?: unknown; username?: unknown; password?: unknown };
     const ident = String(b.email ?? "").trim().toLowerCase();
     const email = (await emailFor(ident)) ?? ident;
     const code = String(b.code ?? "").trim();
@@ -141,6 +143,18 @@ const routes: Record<string, Handler> = {
     }
     const existing = await getPlayerByEmail(email);
     if (existing) {
+      // with no emailed code, the password is what proves it is you
+      if (!config.emailCodes) {
+        const f = failedLogins.get(email);
+        if (f && Date.now() < f.until && f.n >= 10) return { status: 429, json: { error: "Too many wrong passwords. Try again in 15 minutes." } };
+        if (!existing.password_hash) return { status: 401, json: { error: "This account has no password. Please sign up again." } };
+        if (!(await checkPassword(String(b.password ?? ""), existing.password_hash))) {
+          const live = f && Date.now() < f.until ? f : { n: 0, until: Date.now() + 15 * 60_000 };
+          failedLogins.set(email, { n: live.n + 1, until: live.until });
+          return { status: 401, json: { error: "That password is not right." } };
+        }
+        failedLogins.delete(email);
+      }
       return { json: { isNew: false, pid: existing.pid, name: existing.name, username: existing.username, email: existing.email, look: existing.profile_json ? JSON.parse(existing.profile_json) : null, token: issueToken(existing.pid) } };
     }
     const name = String(b.name ?? "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 16);
@@ -148,8 +162,9 @@ const routes: Record<string, Handler> = {
     const username = String(b.username ?? "").trim();
     if (!USERNAME.test(username)) return { status: 400, json: { error: USERNAME_HELP } };
     if (await getPlayerByUsername(username)) return { status: 409, json: { error: "That username is taken. Try another." } };
+    if (!passwordOk(b.password)) return { status: 400, json: { error: PASSWORD_HELP } };
     const pid = randomUUID().replace(/-/g, "").slice(0, 20);
-    await createVerifiedPlayer(pid, name, email, b.look && typeof b.look === "object" ? b.look : null, username);
+    await createVerifiedPlayer(pid, name, email, b.look && typeof b.look === "object" ? b.look : null, username, await hashPassword(b.password));
     return { json: { isNew: true, pid, name, username, email, look: b.look ?? null, token: issueToken(pid) } };
   },
 

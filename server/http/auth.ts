@@ -9,9 +9,9 @@ const same = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-export const TOKEN_DAYS = 30;
+export const TOKEN_DAYS = 180;
 
-/** Session token: `v2.<pid>.<expiry>.<signature>`. It expires after 30 days. */
+/** Session token: `v2.<pid>.<expiry>.<signature>`. It lasts 180 days, so players stay signed in until they log out. */
 export function issueToken(pid: string, days = TOKEN_DAYS) {
   const exp = Math.floor(Date.now() / 1000) + days * 86400;
   return `v2.${pid}.${exp}.${mac(`${pid}.${exp}`)}`;
@@ -24,7 +24,8 @@ export async function verifyToken(token: string | undefined | null): Promise<str
     const [, pid, exp, sig] = token.split(".");
     if (!pid || !exp || !sig) return null;
     if (Number(exp) < Date.now() / 1000) return null;
-    return same(sig, mac(`${pid}.${exp}`)) ? pid : null;
+    // the account must still exist: a wiped database logs everyone out
+    return same(sig, mac(`${pid}.${exp}`)) && (await hasEmail(pid)) ? pid : null;
   }
   // old guest tokens (`pid.signature`) keep working, but only for players who never attached an email
   const i = token.lastIndexOf(".");
