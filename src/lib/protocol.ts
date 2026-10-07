@@ -12,6 +12,12 @@ export type PlotState = {
   biz?: string;
   /** who may come in: "ask" (the owner is asked each time), "friends" (friends walk straight in), "closed" */
   visit?: "ask" | "friends" | "closed";
+  /** what the business charges for its main product or service (naira) */
+  price?: number;
+  /** what a member of staff is paid for each shift (naira) */
+  wage?: number;
+  /** the people the owner has hired */
+  staff?: { pid: string; name: string }[];
 };
 
 export type Policy = "none" | "transport" | "food" | "wages";
@@ -104,6 +110,10 @@ export type S2C =
   | { t: "doing"; id: string; label: string | null }
   | { t: "typing"; from: string; name: string; dm: boolean }
   | { t: "pong"; at: number }
+  | { t: "sale"; plotId: string; from: string; item: string; amount: number }
+  | { t: "hired"; plotId: string; owner: string; business: string; wage: number }
+  | { t: "fired"; plotId: string; owner: string; business: string }
+  | { t: "debit"; id: number; to: string; amount: number; note: string }
   | { t: "served"; from: string; name: string; dish: string }
   | { t: "serveResult"; from: string; name: string; dish: string; accept: boolean }
   | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };

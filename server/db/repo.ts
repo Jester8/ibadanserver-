@@ -9,21 +9,21 @@ const one = async <T,>(sql: string, params: unknown[] = []) => (await db.query<T
 
 /* ------------------------------------ land ------------------------------------ */
 
-type PlotRow = { plot_id: string; owner_pid: string; owner_name: string; tier: number; collected_at: number; decor_json: string | null; biz: string | null; visit: string | null };
+type PlotRow = { plot_id: string; owner_pid: string; owner_name: string; tier: number; collected_at: number; decor_json: string | null; biz: string | null; visit: string | null; price: number | null; wage: number | null; staff_json: string | null };
 
 export async function loadPlots(): Promise<Record<string, PlotState>> {
   const out: Record<string, PlotState> = {};
   for (const r of await db.query<PlotRow>("SELECT * FROM plots")) {
-    out[r.plot_id] = { ownerId: r.owner_pid, ownerName: r.owner_name, tier: r.tier, collectedAt: r.collected_at, decor: r.decor_json ? JSON.parse(r.decor_json) : undefined, biz: r.biz ?? undefined, visit: (r.visit as PlotState["visit"]) ?? undefined };
+    out[r.plot_id] = { ownerId: r.owner_pid, ownerName: r.owner_name, tier: r.tier, collectedAt: r.collected_at, decor: r.decor_json ? JSON.parse(r.decor_json) : undefined, biz: r.biz ?? undefined, visit: (r.visit as PlotState["visit"]) ?? undefined, price: r.price ?? undefined, wage: r.wage ?? undefined, staff: r.staff_json ? JSON.parse(r.staff_json) : undefined };
   }
   return out;
 }
 
 export async function savePlot(id: string, p: PlotState) {
   await db.query(
-    `INSERT INTO plots (plot_id, owner_pid, owner_name, tier, collected_at, decor_json, biz, visit) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     ON CONFLICT (plot_id) DO UPDATE SET owner_pid = EXCLUDED.owner_pid, owner_name = EXCLUDED.owner_name, tier = EXCLUDED.tier, collected_at = EXCLUDED.collected_at, decor_json = EXCLUDED.decor_json, biz = EXCLUDED.biz, visit = EXCLUDED.visit`,
-    [id, p.ownerId, p.ownerName, p.tier, p.collectedAt, p.decor ? JSON.stringify(p.decor) : null, p.biz ?? null, p.visit ?? null],
+    `INSERT INTO plots (plot_id, owner_pid, owner_name, tier, collected_at, decor_json, biz, visit, price, wage, staff_json) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (plot_id) DO UPDATE SET owner_pid = EXCLUDED.owner_pid, owner_name = EXCLUDED.owner_name, tier = EXCLUDED.tier, collected_at = EXCLUDED.collected_at, decor_json = EXCLUDED.decor_json, biz = EXCLUDED.biz, visit = EXCLUDED.visit, price = EXCLUDED.price, wage = EXCLUDED.wage, staff_json = EXCLUDED.staff_json`,
+    [id, p.ownerId, p.ownerName, p.tier, p.collectedAt, p.decor ? JSON.stringify(p.decor) : null, p.biz ?? null, p.visit ?? null, p.price ?? null, p.wage ?? null, p.staff ? JSON.stringify(p.staff) : null],
   );
 }
 
@@ -211,8 +211,8 @@ export const deleteTrackRow = (id: string) => db.query("DELETE FROM tracks WHERE
 
 export type TransferRow = { id: number; from_pid: string; to_pid: string; amount: number; note: string; at: number; claimed: number };
 
-export async function addTransfer(from: string, to: string, amount: number, note: string) {
-  const r = await db.query<{ id: number }>("INSERT INTO transfers (from_pid, to_pid, amount, note, at) VALUES ($1, $2, $3, $4, $5) RETURNING id", [from, to, amount, note, Date.now()]);
+export async function addTransfer(from: string, to: string, amount: number, note: string, kind = "transfer", debited = 1, plot: string | null = null) {
+  const r = await db.query<{ id: number }>("INSERT INTO transfers (from_pid, to_pid, amount, note, at, kind, debited, plot) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", [from, to, amount, note, Date.now(), kind, debited, plot]);
   return r[0].id;
 }
 export const sentSince = async (pid: string, since: number) => Number((await db.query<{ n: string | null }>("SELECT COALESCE(SUM(amount), 0) AS n FROM transfers WHERE from_pid = $1 AND at > $2", [pid, since]))[0]?.n ?? 0);
@@ -224,3 +224,13 @@ export async function claimTransfer(id: number, pid: string) {
 }
 export const getTransfer = (id: number) => one<TransferRow>("SELECT * FROM transfers WHERE id = $1", [id]);
 export const transfersOf = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE from_pid = $1 OR to_pid = $1 ORDER BY id DESC LIMIT 25", [pid]);
+
+/** Wages owed by an employer who was offline when the shift was worked. */
+export const pendingDebits = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE from_pid = $1 AND debited = 0 ORDER BY id LIMIT 50", [pid]);
+export async function markDebited(id: number, pid: string) {
+  const r = await db.query<{ id: number }>("UPDATE transfers SET debited = 1 WHERE id = $1 AND from_pid = $2 AND debited = 0 RETURNING id", [id, pid]);
+  return r.length > 0;
+}
+/** Recent sales a business has made, newest first. */
+export const salesOf = (plot: string) => db.query<TransferRow & { plot: string }>("SELECT * FROM transfers WHERE plot = $1 AND kind = 'sale' ORDER BY id DESC LIMIT 25", [plot]);
+export const lastShift = async (worker: string, plot: string) => Number((await db.query<{ at: number | null }>("SELECT MAX(at) AS at FROM transfers WHERE to_pid = $1 AND plot = $2 AND kind = 'wage'", [worker, plot]))[0]?.at ?? 0);

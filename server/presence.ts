@@ -6,6 +6,11 @@ import type { Seat } from "../src/lib/protocol";
 export type Client = { ws: WebSocket; info: PeerInfo; moved: boolean; speed: number; voiceRoom: string | null; lastChat: number;
   lastPhoto: number; lastKnock: number; sit: Seat | null; doing: string | null; lastTyping: number; lastServe: number; verified: boolean };
 
+import type { PlotState } from "../src/lib/protocol";
+
+/** The land and what is built on it, held in memory and saved to the database as it changes. */
+export const plots: Record<string, PlotState> = {};
+
 /** Everyone connected right now, by connection id. Shared by the websocket handlers and the REST routes. */
 export const clients = new Map<string, Client>();
 

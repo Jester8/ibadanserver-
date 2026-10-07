@@ -10,16 +10,16 @@ import { WebSocketServer, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import { config } from "./config";
 import { db, migrate } from "./db";
-import { addReport, addRoomMessage, blockedEither, blocksOf, friendshipsOf, getFriendship, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
+import { addReport, addRoomMessage, blockedEither, blocksOf, friendshipsOf, getFriendship, getPlayer, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
 import { handleHttp } from "./http/router";
-import { broadcast, clients, isOnline, sendToPid, tx, type Client } from "./presence";
+import { BIZ_INFO, DEFAULT_WAGE, MAX_WAGE } from "./business";
+import { broadcast, clients, isOnline, plots, sendToPid, tx, type Client } from "./presence";
 import { sendDm } from "./http/social";
 import { verifyToken } from "./http/auth";
 import { cleanChat } from "../src/lib/moderation";
 import type { C2S, Election, PeerInfo, PlotState, Policy, S2C } from "../src/lib/protocol";
 
 /** Open the database, apply migrations and load the land before anyone connects. */
-const plots: Record<string, PlotState> = {};
 const ready = (async () => {
   await migrate();
   await importLegacyPlots(__dirname);
@@ -340,7 +340,24 @@ wss.on("connection", (ws) => {
           decor: Array.isArray(m.plot.decor) ? m.plot.decor.filter((d) => typeof d === "string" && /^[a-z0-9]{1,20}$/.test(d)).slice(0, 21) : existing?.decor,
           visit: m.plot.visit === "ask" || m.plot.visit === "friends" || m.plot.visit === "closed" ? m.plot.visit : existing?.visit ?? "ask",
           biz: typeof m.plot.biz === "string" && /^[a-z0-9]{1,20}$/.test(m.plot.biz) ? m.plot.biz : undefined,
+          price: typeof m.plot.price === "number" && Number.isFinite(m.plot.price) ? Math.max(100, Math.min(50_000, Math.floor(m.plot.price))) : existing?.price,
+          wage: typeof m.plot.wage === "number" && Number.isFinite(m.plot.wage) ? Math.max(0, Math.min(MAX_WAGE, Math.floor(m.plot.wage))) : existing?.wage,
         };
+        // the people the owner has hired: real accounts only, and they are told when it changes
+        if (plot.biz && Array.isArray(m.plot.staff)) {
+          const staff: { pid: string; name: string }[] = [];
+          for (const s of m.plot.staff.slice(0, 12)) {
+            const pid = clean(s?.pid, 40);
+            const who = pid && pid !== c.info.pid ? await getPlayer(pid) : undefined;
+            if (who && !staff.some((x) => x.pid === pid)) staff.push({ pid, name: who.name });
+          }
+          plot.staff = staff;
+        } else plot.staff = plot.biz ? existing?.staff : undefined;
+        const before = new Set((existing?.staff ?? []).map((s) => s.pid));
+        const after = new Set((plot.staff ?? []).map((s) => s.pid));
+        const bizName = BIZ_INFO[plot.biz ?? ""]?.name ?? "business";
+        for (const pid of after) if (!before.has(pid)) sendToPid(pid, { t: "hired", plotId: m.plotId, owner: plot.ownerName, business: bizName, wage: plot.wage ?? DEFAULT_WAGE });
+        for (const pid of before) if (!after.has(pid)) sendToPid(pid, { t: "fired", plotId: m.plotId, owner: plot.ownerName, business: bizName });
         plots[m.plotId] = plot;
         await savePlot(m.plotId, plot);
         broadcast({ t: "plot", plotId: m.plotId, plot });
