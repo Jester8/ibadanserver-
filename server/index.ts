@@ -122,7 +122,7 @@ wss.on("connection", (ws) => {
       };
       await touchPlayer(info.pid, info.name);
       if (!client) {
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, verified };
+        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, doing: null, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
@@ -148,14 +148,23 @@ wss.on("connection", (ws) => {
         break;
       case "room": {
         // changing rooms means standing up where you were
-        if (c.sit) {
-          for (const other of clients.values()) if (other.info.id !== id && other.info.room === c.info.room) tx(other.ws, { t: "sit", id, u: null });
+        if (c.sit || c.doing) {
+          for (const other of clients.values()) {
+            if (other.info.id === id || other.info.room !== c.info.room) continue;
+            if (c.sit) tx(other.ws, { t: "sit", id, u: null });
+            if (c.doing) tx(other.ws, { t: "doing", id, label: null });
+          }
           c.sit = null;
+          c.doing = null;
         }
         c.info.room = clean(m.room, 40) || "streets";
         broadcast({ t: "join", peer: c.info }, id);
         // show the newcomer who is already sitting here
-        for (const other of clients.values()) if (other.info.id !== id && other.info.room === c.info.room && other.sit) tx(ws, { t: "sit", id: other.info.id, u: other.sit });
+        for (const other of clients.values()) {
+          if (other.info.id === id || other.info.room !== c.info.room) continue;
+          if (other.sit) tx(ws, { t: "sit", id: other.info.id, u: other.sit });
+          if (other.doing) tx(ws, { t: "doing", id: other.info.id, label: other.doing });
+        }
         // show what was said here recently, minus anyone you have blocked
         const mine = c.info.pid;
         const hidden = new Set(await blocksOf(mine));
@@ -203,6 +212,9 @@ wss.on("connection", (ws) => {
         };
         if (!plot || plot.tier < 1 || plot.biz) return result(false, "Nobody lives there.");
         if (plot.ownerId === c.info.pid) return result(true);
+        // you can only visit while the owner is home: they are the host, and the house closes behind them when they leave
+        const hostHome = [...clients.values()].some((o) => o.info.pid === plot.ownerId && o.info.room === `in:home:${m.plotId}`);
+        if (!hostHome) return result(false, "They are not home right now. You can only visit while they are inside.");
         const grant = grants.get(`${c.info.pid}|${m.plotId}`);
         if (grant && grant > now) return result(true);
         if (await blockedEither(c.info.pid, plot.ownerId)) return result(false, "The door stays shut.");
@@ -233,6 +245,12 @@ wss.on("connection", (ws) => {
         if (!plot || plot.ownerId !== c.info.pid || !visitor) return;
         if (m.allow) grants.set(`${visitor.info.pid}|${m.plotId}`, Date.now() + 30 * 60_000);
         tx(visitor.ws, { t: "knockResult", plotId: m.plotId, allow: !!m.allow, reason: m.allow ? undefined : "They cannot have visitors right now." });
+        break;
+      }
+      case "doing": {
+        // what someone is up to (cooking, eating...), so people in the room can join in
+        c.doing = typeof m.label === "string" && m.label ? clean(m.label, 40) : null;
+        for (const other of clients.values()) if (other.info.id !== id && other.info.room === c.info.room) tx(other.ws, { t: "doing", id, label: c.doing });
         break;
       }
       case "sit": {
