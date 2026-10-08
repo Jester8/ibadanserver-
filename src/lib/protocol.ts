@@ -100,6 +100,7 @@ export type S2C =
   | { t: "relAsk"; from: string; name: string; level: string }
   | { t: "relChanged"; pid: string; name: string; level: string; by: "them" | "accepted" }
   | { t: "relDeclined"; pid: string; name: string; level: string }
+  | { t: "famEvent"; kind: "ask" | "accepted" | "declined" | "removed"; pid: string; name: string; role: string }
   | { t: "presence"; pid: string; online: boolean }
   | { t: "dmError"; error: string }
   | { t: "photo"; photoId: string; from: string; name: string; data: string }

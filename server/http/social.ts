@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { cleanChat } from "../../src/lib/moderation";
-import { addBlock, addDm, acceptFriend, blockedEither, countLevel, searchPlayers, setFriendLevel, blocksOf, countFriends, dmThread, dmThreads, friendshipsOf, getDm, getFriendship, getPlayer, markRead, removeBlock, removeFriendship, requestFriend } from "../db/repo";
+import { acceptFamily, addBlock, addDm, acceptFriend, blockedEither, familyOf, getFamilyLink, removeFamily, requestFamily, countLevel, searchPlayers, setFriendLevel, blocksOf, countFriends, dmThread, dmThreads, friendshipsOf, getDm, getFriendship, getPlayer, markRead, removeBlock, removeFriendship, requestFriend } from "../db/repo";
 import { isOnline, sendToPid } from "../presence";
 import { verifyToken } from "./auth";
 
@@ -13,6 +13,10 @@ export const LEVELS = ["friend", "bestie", "fwb", "babe", "wife"] as const;
 const rank = (l: string) => LEVELS.indexOf(l as (typeof LEVELS)[number]);
 const LABEL: Record<string, string> = { friend: "friend", bestie: "best friend", fwb: "friends with benefits", babe: "babe", wife: "wife" };
 const PARTNER = ["babe", "wife"];
+/** Family is real people: you ask a friend to be your dad, mum or sibling, and they have to accept. Everyone starts with none. */
+export const FAMILY_ROLES = ["dad", "mum", "sibling"] as const;
+const MAX_FAMILY = 12;
+const MAX_FAMILY_ASKS = 5;
 /** proposals waiting for an answer: "from|to" -> level and when */
 const asks = new Map<string, { level: string; at: number }>();
 
@@ -57,9 +61,17 @@ export async function sendDm(from: string, to: string, rawText: unknown): Promis
   return { ok: true, msg };
 }
 
+/** Family needs friendship: when two people stop being friends, their family link (or request) goes too. */
+async function dropFamily(me: string, other: string) {
+  const f = PID.test(other) ? await getFamilyLink(me, other) : undefined;
+  if (!f) return;
+  await removeFamily(me, other);
+  sendToPid(other, { t: "famEvent", kind: "removed", pid: me, name: "", role: f.role });
+}
+
 export async function handleSocial(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
   const path = url.pathname;
-  if (!/^\/api\/(friends|blocks|dm|players)/.test(path)) return false;
+  if (!/^\/api\/(friends|family|blocks|dm|players)/.test(path)) return false;
   const send = (status: number, json: unknown) => void res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(json));
   const me = await verifyToken(req.headers.authorization?.replace(/^Bearer /i, ""));
   if (!me) return send(401, { error: "unauthorised" }), true;
@@ -151,7 +163,72 @@ export async function handleSocial(req: IncomingMessage, res: ServerResponse, ur
   }
   if (req.method === "DELETE" && parts[1] === "friends" && parts.length === 3) {
     await removeFriendship(me, parts[2]);
+    await dropFamily(me, parts[2]);
     sendToPid(parts[2], { t: "friendEvent", kind: "removed", pid: me, name: "" });
+    return send(200, { ok: true }), true;
+  }
+
+  // ---------------- family
+  if (req.method === "GET" && path === "/api/family") {
+    const members: unknown[] = [];
+    const incoming: unknown[] = [];
+    const outgoing: unknown[] = [];
+    for (const f of await familyOf(me)) {
+      const other = f.a === me ? f.b : f.a;
+      const info = await look(other);
+      if (!info) continue;
+      const mine = f.requester === me;
+      // "relation" is what the other person is to you: the role you asked for, or child / sibling when you were the one asked
+      if (f.status === "accepted") members.push({ ...info, online: isOnline(other), relation: mine ? f.role : f.role === "sibling" ? "sibling" : "child", since: f.created_at });
+      else if (mine) outgoing.push({ ...info, role: f.role });
+      else incoming.push({ ...info, role: f.role });
+    }
+    return send(200, { members, incoming, outgoing }), true;
+  }
+  if (req.method === "POST" && path === "/api/family/request") {
+    const to = clean(body?.pid, 40);
+    const role = clean(body?.role, 10);
+    if (!PID.test(to) || to === me || !(await getPlayer(to))) return send(404, { error: "Player not found." }), true;
+    if (!(FAMILY_ROLES as readonly string[]).includes(role)) return send(400, { error: "Pick dad, mum or sibling." }), true;
+    if (await blockedEither(me, to)) return send(403, { error: "You can't send this request." }), true;
+    if ((await getFriendship(me, to))?.status !== "accepted") return send(400, { error: "Only your friends can be your family. Add them as a friend first." }), true;
+    const existing = await getFamilyLink(me, to);
+    if (existing) return send(400, { error: existing.status === "accepted" ? "They are already your family." : existing.requester === me ? "You already asked them. Waiting for their answer." : "They already asked you. Check your requests." }), true;
+    const links = await familyOf(me);
+    if (links.filter((l) => l.status === "accepted").length >= MAX_FAMILY) return send(400, { error: "Your family is full." }), true;
+    if (links.filter((l) => l.status === "pending" && l.requester === me).length >= MAX_FAMILY_ASKS) return send(400, { error: "You have too many requests waiting. Wait for answers first." }), true;
+    if (role !== "sibling" && links.some((l) => l.requester === me && l.role === role)) return send(400, { error: `You already have ${role === "dad" ? "a dad" : "a mum"} (or asked someone to be).` }), true;
+    await requestFamily(me, to, role);
+    sendToPid(to, { t: "famEvent", kind: "ask", pid: me, name: (await getPlayer(me))?.name ?? "", role });
+    return send(200, { status: "pending" }), true;
+  }
+  if (req.method === "POST" && path === "/api/family/respond") {
+    const other = clean(body?.pid, 40);
+    const f = PID.test(other) ? await getFamilyLink(me, other) : undefined;
+    if (!f || f.status !== "pending" || f.requester === me) return send(404, { error: "No such request." }), true;
+    const myName = (await getPlayer(me))?.name ?? "";
+    if (body!.accept === true) {
+      if ((await getFriendship(me, other))?.status !== "accepted") {
+        await removeFamily(me, other);
+        return send(400, { error: "You are no longer friends with them." }), true;
+      }
+      const mine = (await familyOf(me)).filter((l) => l.status === "accepted").length;
+      const theirs = (await familyOf(other)).filter((l) => l.status === "accepted").length;
+      if (mine >= MAX_FAMILY || theirs >= MAX_FAMILY) return send(400, { error: "A family can't be bigger than 12 people." }), true;
+      await acceptFamily(me, other);
+      sendToPid(other, { t: "famEvent", kind: "accepted", pid: me, name: myName, role: f.role });
+      return send(200, { status: "accepted" }), true;
+    }
+    await removeFamily(me, other);
+    sendToPid(other, { t: "famEvent", kind: "declined", pid: me, name: myName, role: f.role });
+    return send(200, { status: "declined" }), true;
+  }
+  if (req.method === "DELETE" && parts[1] === "family" && parts.length === 3 && PID.test(parts[2])) {
+    // cancel a request you sent, or leave a family link
+    const f = await getFamilyLink(me, parts[2]);
+    if (!f) return send(404, { error: "No such family link." }), true;
+    await removeFamily(me, parts[2]);
+    sendToPid(parts[2], { t: "famEvent", kind: "removed", pid: me, name: (await getPlayer(me))?.name ?? "", role: f.role });
     return send(200, { ok: true }), true;
   }
 
@@ -163,6 +240,7 @@ export async function handleSocial(req: IncomingMessage, res: ServerResponse, ur
       if (!PID.test(other) || other === me || !(await getPlayer(other))) return send(404, { error: "Player not found." }), true;
       await addBlock(me, other);
       await removeFriendship(me, other);
+      await dropFamily(me, other);
       return send(200, { ok: true }), true;
     }
   }

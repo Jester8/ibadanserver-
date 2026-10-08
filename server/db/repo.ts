@@ -138,6 +138,28 @@ export function removeFriendship(x: string, y: string) {
 }
 export const countFriends = async (pid: string) => (await one<{ n: number }>("SELECT COUNT(*)::int AS n FROM friendships WHERE (a = $1 OR b = $1) AND status = 'accepted'", [pid]))?.n ?? 0;
 
+/* ------------------------------------ family ------------------------------------ */
+
+export type FamilyRow = { a: string; b: string; requester: string; role: string; status: "pending" | "accepted"; created_at: number };
+
+export function getFamilyLink(x: string, y: string) {
+  const [a, b] = pair(x, y);
+  return one<FamilyRow>("SELECT * FROM family WHERE a = $1 AND b = $2", [a, b]);
+}
+export const familyOf = (pid: string) => db.query<FamilyRow>("SELECT * FROM family WHERE a = $1 OR b = $1 ORDER BY created_at", [pid]);
+export function requestFamily(from: string, to: string, role: string) {
+  const [a, b] = pair(from, to);
+  return db.query("INSERT INTO family (a, b, requester, role, status, created_at) VALUES ($1, $2, $3, $4, 'pending', $5)", [a, b, from, role, Date.now()]);
+}
+export function acceptFamily(x: string, y: string) {
+  const [a, b] = pair(x, y);
+  return db.query("UPDATE family SET status = 'accepted' WHERE a = $1 AND b = $2", [a, b]);
+}
+export function removeFamily(x: string, y: string) {
+  const [a, b] = pair(x, y);
+  return db.query("DELETE FROM family WHERE a = $1 AND b = $2", [a, b]);
+}
+
 export const blockedEither = async (x: string, y: string) => !!(await one("SELECT 1 AS x FROM blocks WHERE (blocker = $1 AND blocked = $2) OR (blocker = $2 AND blocked = $1)", [x, y]));
 export const blocksOf = async (pid: string) => (await db.query<{ blocked: string }>("SELECT blocked FROM blocks WHERE blocker = $1", [pid])).map((r) => r.blocked);
 export const addBlock = (blocker: string, blocked: string) => db.query("INSERT INTO blocks (blocker, blocked, at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [blocker, blocked, Date.now()]);

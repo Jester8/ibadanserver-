@@ -41,6 +41,13 @@ const limited = (ip: string) => {
 const clamp = (n: unknown, lo: number, hi: number, d = lo) => (typeof n === "number" && Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : d);
 const strs = (a: unknown, max: number) => (Array.isArray(a) ? a.filter((x): x is string => typeof x === "string" && /^[\w-]{1,24}$/.test(x)).slice(0, max) : []);
 
+/** Who the player said they are at sign-up: nepo or lapo, a job and a hobby (ids only; the game holds the wording). */
+const sanitizeBackground = (b: unknown) => {
+  const o = (b && typeof b === "object" ? b : {}) as Record<string, unknown>;
+  const id = (v: unknown) => (typeof v === "string" && /^[\w-]{1,24}$/.test(v) ? v : null);
+  return (o.path === "nepo" || o.path === "lapo") && id(o.job) && id(o.hobby) ? { path: o.path, job: id(o.job), hobby: id(o.hobby) } : null;
+};
+
 /** Only known fields, within sane bounds: the save is cloud storage, not a trusted economy (yet). */
 export function sanitizeState(s: unknown) {
   const o = (s && typeof s === "object" ? s : {}) as Record<string, unknown>;
@@ -59,6 +66,7 @@ export function sanitizeState(s: unknown) {
     activeCar: typeof o.activeCar === "string" && /^[\w-]{1,24}$/.test(o.activeCar) ? o.activeCar : null,
     romance,
     stats: o.stats && typeof o.stats === "object" ? o.stats : {},
+    background: sanitizeBackground(o.background),
   };
 }
 
@@ -208,9 +216,13 @@ const routes: Record<string, Handler> = {
   },
 };
 
+/** An allowed origin also covers its www / bare-domain twin: listing https://example.com lets https://www.example.com in too (the site redirects one to the other). */
+const twin = (o: string) => (/^https?:\/\/www\./.test(o) ? o.replace("://www.", "://") : o.replace("://", "://www."));
+const originAllowed = (o: string) => config.origins.includes("*") || config.origins.includes(o) || (!/\/\/(www\.)?(localhost|127\.0\.0\.1)/.test(o) && config.origins.includes(twin(o)));
+
 function cors(req: IncomingMessage, res: ServerResponse) {
   const origin = req.headers.origin;
-  if (origin && (config.origins.includes("*") || config.origins.includes(origin))) {
+  if (origin && originAllowed(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Headers", "authorization, content-type, x-admin-token, range");
