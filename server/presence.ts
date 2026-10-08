@@ -4,7 +4,7 @@ import type { PeerInfo, S2C } from "../src/lib/protocol";
 import type { Seat } from "../src/lib/protocol";
 
 export type Client = { ws: WebSocket; info: PeerInfo; moved: boolean; speed: number; voiceRoom: string | null; lastChat: number;
-  lastPhoto: number; lastKnock: number; sit: Seat | null; doing: string | null; lastTyping: number; lastServe: number; verified: boolean };
+  lastPhoto: number; lastImg: number; lastKnock: number; sit: Seat | null; doing: string | null; lastTyping: number; lastServe: number; verified: boolean };
 
 import type { PlotState } from "../src/lib/protocol";
 

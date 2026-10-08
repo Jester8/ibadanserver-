@@ -50,6 +50,8 @@ export type C2S =
   | { t: "move"; x: number; z: number; ry: number; s: number }
   | { t: "room"; room: string }
   | { t: "chat"; text: string }
+  /** a small picture (a JPEG data URL of about 10 KB at most) for everyone in the room */
+  | { t: "chatimg"; data: string }
   | { t: "plotSet"; plotId: string; plot: PlotState }
   | { t: "voiceJoin"; room: string }
   | { t: "voiceLeave" }
@@ -81,6 +83,7 @@ export type S2C =
   | { t: "leave"; id: string }
   | { t: "moves"; m: [string, number, number, number, number][] }
   | { t: "chat"; id: string; name: string; room: string; text: string; at: number }
+  | { t: "chatimg"; id: string; name: string; room: string; data: string; at: number }
   | { t: "plots"; plots: Record<string, PlotState> }
   | { t: "plot"; plotId: string; plot: PlotState }
   | { t: "reject"; plotId: string }
@@ -91,7 +94,7 @@ export type S2C =
   | { t: "incomingCall"; from: string; name: string }
   | { t: "callReply"; from: string; accept: boolean }
   | { t: "hangup"; from: string }
-  | { t: "online"; n: number }
+  | { t: "online"; n: number; /** how many accounts have been created in all */ accounts?: number }
   | { t: "emote"; id: string; e: "wave" | "dance" }
   | { t: "election"; e: Election; myVote: string | null }
   | { t: "dm"; id: number; from: string; to: string; text: string; at: number; fromName: string }

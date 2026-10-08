@@ -59,6 +59,9 @@ export async function touchPlayer(pid: string, name: string) {
   );
 }
 
+/** Accounts created in all (a guest that never signed up is not counted). */
+export const countAccounts = async () => (await one<{ n: number }>("SELECT COUNT(*)::int AS n FROM players WHERE email IS NOT NULL"))?.n ?? 0;
+
 export const getPlayer = (pid: string) => one<PlayerRow>(`SELECT ${PLAYER} FROM players WHERE pid = $1`, [pid]);
 export const getPlayerByEmail = (email: string) => one<PlayerRow>(`SELECT ${PLAYER} FROM players WHERE email = $1`, [email]);
 export const hasEmail = async (pid: string) => !!(await one<{ email: string | null }>("SELECT email FROM players WHERE pid = $1", [pid]))?.email;

@@ -10,7 +10,7 @@ import { WebSocketServer, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import { config } from "./config";
 import { db, migrate } from "./db";
-import { addReport, addRoomMessage, blockedEither, blocksOf, friendshipsOf, getFriendship, getPlayer, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
+import { addReport, addRoomMessage, blockedEither, blocksOf, countAccounts, friendshipsOf, getFriendship, getPlayer, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
 import { handleHttp } from "./http/router";
 import { BIZ_INFO, DEFAULT_WAGE, MAX_WAGE } from "./business";
 import { broadcast, clients, isOnline, plots, sendToPid, tx, type Client } from "./presence";
@@ -90,6 +90,17 @@ const wss = new WebSocketServer({ server: httpServer, maxPayload: 1_000_000 });
 /** How many different players are online (not how many connections there are). */
 const onlineCount = () => new Set([...clients.values()].map((c) => c.info.pid)).size;
 
+/** A chat picture is a JPEG data URL of about 10 KB at most (13,360 characters); a little slack is allowed. */
+const MAX_CHAT_IMG = 13_700;
+const CHAT_IMG = /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/;
+
+/** The account total changes slowly, so it is asked of the database at most once a minute. */
+let accountsCache = { n: 0, at: 0 };
+async function onlineMsg(): Promise<S2C> {
+  if (Date.now() - accountsCache.at > 60_000) accountsCache = { n: await countAccounts().catch(() => accountsCache.n), at: Date.now() };
+  return { t: "online", n: onlineCount(), accounts: accountsCache.n };
+}
+
 wss.on("connection", (ws) => {
   const id = randomUUID().slice(0, 8);
   let client: Client | null = null;
@@ -133,7 +144,7 @@ wss.on("connection", (ws) => {
           broadcast({ t: "leave", id: old.info.id });
           old.ws.close(4000, "opened elsewhere");
         }
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
+        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastImg: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
@@ -142,8 +153,9 @@ wss.on("connection", (ws) => {
         client.info = { ...client.info, name: info.name, look: info.look };
       }
       broadcast({ t: "join", peer: client.info }, id);
-      broadcast({ t: "online", n: onlineCount() });
-      tx(ws, { t: "online", n: onlineCount() });
+      const online = await onlineMsg();
+      broadcast(online);
+      tx(ws, online);
       return;
     }
     if (!client) return;
@@ -193,6 +205,21 @@ wss.on("connection", (ws) => {
         for (const other of clients.values()) {
           if (other.info.room !== c.info.room) continue;
           if (other.info.id !== id && (await blockedEither(c.info.pid, other.info.pid))) continue; // blocked either way: not delivered
+          tx(other.ws, msg);
+        }
+        break;
+      }
+      case "chatimg": {
+        // a small picture for everyone in the room. The client shrinks it to about 10 KB; anything much bigger is refused.
+        // Relayed straight through and never stored (so it is not in the history a newcomer is shown).
+        const now = Date.now();
+        const data = typeof m.data === "string" ? m.data : "";
+        if (data.length > MAX_CHAT_IMG || !CHAT_IMG.test(data) || now - c.lastImg < 3000) return;
+        c.lastImg = now;
+        const msg: S2C = { t: "chatimg", id, name: c.info.name, room: c.info.room, data, at: now };
+        for (const other of clients.values()) {
+          if (other.info.room !== c.info.room) continue;
+          if (other.info.id !== id && (await blockedEither(c.info.pid, other.info.pid))) continue;
           tx(other.ws, msg);
         }
         break;
@@ -453,7 +480,7 @@ wss.on("connection", (ws) => {
     clients.delete(id);
     if (c.verified && !isOnline(c.info.pid)) void tellFriends(c.info.pid, false);
     broadcast({ t: "leave", id });
-    broadcast({ t: "online", n: onlineCount() });
+    void onlineMsg().then((m) => broadcast(m));
   });
 });
 
