@@ -45,6 +45,13 @@ export type PeerInfo = {
 /** Where someone is seated or lying down on furniture, so everyone in the room sees them settle in. */
 export type Seat = { pose: "sit" | "lie"; x: number; z: number; ry: number; seatH: number };
 
+/**
+ * Listening together: "invite" (host to friend, with the Spotify link `uri`), "accept" / "decline" (the friend's answer),
+ * "state" (the host's player: `playing`, `pos` in seconds, and `item` when Spotify says which song is on), "end" (either side).
+ * Only between accepted friends. `to` / `from` are player ids.
+ */
+export type ListenOp = "invite" | "accept" | "decline" | "end" | "state";
+
 export type C2S =
   | { t: "hello"; pid: string; name: string; look: Look; token?: string }
   | { t: "move"; x: number; z: number; ry: number; s: number }
@@ -75,7 +82,9 @@ export type C2S =
   | { t: "knockReply"; to: string; plotId: string; allow: boolean }
   | { t: "run"; slogan: string }
   | { t: "vote"; pid: string }
-  | { t: "policy"; policy: Policy };
+  | { t: "policy"; policy: Policy }
+  /** listen to Spotify together with a friend: the host invites, the friend answers, then the host's player state is relayed */
+  | { t: "listen"; to: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number };
 
 export type S2C =
   | { t: "welcome"; id: string; peers: PeerInfo[]; plots: Record<string, PlotState> }
@@ -120,4 +129,5 @@ export type S2C =
   | { t: "debit"; id: number; to: string; amount: number; note: string }
   | { t: "served"; from: string; name: string; dish: string }
   | { t: "serveResult"; from: string; name: string; dish: string; accept: boolean }
-  | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };
+  | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] }
+  | { t: "listen"; from: string; name: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number };
