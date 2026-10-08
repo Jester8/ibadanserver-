@@ -10,7 +10,7 @@ import { WebSocketServer, type RawData } from "ws";
 import { randomUUID } from "node:crypto";
 import { config } from "./config";
 import { db, migrate } from "./db";
-import { addReport, addRoomMessage, blockedEither, blocksOf, friendshipsOf, getFriendship, getPlayer, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
+import { addReport, addRoomMessage, blockedEither, blocksOf, countAccounts, friendshipsOf, getFriendship, getPlayer, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
 import { handleHttp } from "./http/router";
 import { BIZ_INFO, DEFAULT_WAGE, MAX_WAGE } from "./business";
 import { broadcast, clients, isOnline, plots, sendToPid, tx, type Client } from "./presence";
@@ -32,6 +32,22 @@ const grants = new Map<string, number>();
 
 const clean = (s: unknown, max: number) => String(s ?? "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, max);
 const num = (n: unknown, fallback = 0) => (typeof n === "number" && Number.isFinite(n) ? n : fallback);
+
+/** A Spotify link in the form the game keeps it in: only a real id ever gets relayed to another player. */
+const SPOTIFY_URI = /^spotify:(?:playlist|album|track|artist|show|episode):[A-Za-z0-9]{22}$/;
+/** Are these two accepted friends, with no block either way? Remembered for 20 seconds so a stream of player updates costs nothing. */
+const friendOk = new Map<string, { ok: boolean; until: number }>();
+async function canListen(x: string, y: string) {
+  if (!x || !y || x === y) return false;
+  const key = x < y ? `${x}|${y}` : `${y}|${x}`;
+  const now = Date.now();
+  const hit = friendOk.get(key);
+  if (hit && hit.until > now) return hit.ok;
+  const ok = (await getFriendship(x, y))?.status === "accepted" && !(await blockedEither(x, y));
+  friendOk.set(key, { ok, until: now + 20_000 });
+  if (friendOk.size > 2000) for (const [k, v] of friendOk) if (v.until < now) friendOk.delete(k);
+  return ok;
+}
 
 /** Let a player's accepted friends know they came online or went offline. */
 async function tellFriends(pid: string, online: boolean) {
@@ -90,6 +106,17 @@ const wss = new WebSocketServer({ server: httpServer, maxPayload: 1_000_000 });
 /** How many different players are online (not how many connections there are). */
 const onlineCount = () => new Set([...clients.values()].map((c) => c.info.pid)).size;
 
+/** A chat picture is a JPEG data URL of about 10 KB at most (13,360 characters); a little slack is allowed. */
+const MAX_CHAT_IMG = 13_700;
+const CHAT_IMG = /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/;
+
+/** The account total changes slowly, so it is asked of the database at most once a minute. */
+let accountsCache = { n: 0, at: 0 };
+async function onlineMsg(): Promise<S2C> {
+  if (Date.now() - accountsCache.at > 60_000) accountsCache = { n: await countAccounts().catch(() => accountsCache.n), at: Date.now() };
+  return { t: "online", n: onlineCount(), accounts: accountsCache.n };
+}
+
 wss.on("connection", (ws) => {
   const id = randomUUID().slice(0, 8);
   let client: Client | null = null;
@@ -133,7 +160,7 @@ wss.on("connection", (ws) => {
           broadcast({ t: "leave", id: old.info.id });
           old.ws.close(4000, "opened elsewhere");
         }
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
+        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastImg: 0, lastListen: 0, lastInvite: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
@@ -142,8 +169,9 @@ wss.on("connection", (ws) => {
         client.info = { ...client.info, name: info.name, look: info.look };
       }
       broadcast({ t: "join", peer: client.info }, id);
-      broadcast({ t: "online", n: onlineCount() });
-      tx(ws, { t: "online", n: onlineCount() });
+      const online = await onlineMsg();
+      broadcast(online);
+      tx(ws, online);
       return;
     }
     if (!client) return;
@@ -195,6 +223,55 @@ wss.on("connection", (ws) => {
           if (other.info.id !== id && (await blockedEither(c.info.pid, other.info.pid))) continue; // blocked either way: not delivered
           tx(other.ws, msg);
         }
+        break;
+      }
+      case "chatimg": {
+        // a small picture for everyone in the room. The client shrinks it to about 10 KB; anything much bigger is refused.
+        // Relayed straight through and never stored (so it is not in the history a newcomer is shown).
+        const now = Date.now();
+        const data = typeof m.data === "string" ? m.data : "";
+        if (data.length > MAX_CHAT_IMG || !CHAT_IMG.test(data) || now - c.lastImg < 3000) return;
+        c.lastImg = now;
+        const msg: S2C = { t: "chatimg", id, name: c.info.name, room: c.info.room, data, at: now };
+        for (const other of clients.values()) {
+          if (other.info.room !== c.info.room) continue;
+          if (other.info.id !== id && (await blockedEither(c.info.pid, other.info.pid))) continue;
+          tx(other.ws, msg);
+        }
+        break;
+      }
+      case "listen": {
+        // listening to Spotify together: relayed between accepted friends only, nothing is stored
+        const op = m.op;
+        if (op !== "invite" && op !== "accept" && op !== "decline" && op !== "end" && op !== "state") return;
+        const now = Date.now();
+        if (op === "state") {
+          if (now - c.lastListen < 400) return;
+          c.lastListen = now;
+        } else if (op === "invite") {
+          if (now - c.lastInvite < 4000) return;
+          c.lastInvite = now;
+        }
+        const to = clean(m.to, 80);
+        if (!(await canListen(c.info.pid, to))) {
+          if (op === "invite") tx(ws, { t: "listen", from: to, name: "", op: "decline" });
+          return;
+        }
+        if (!isOnline(to)) {
+          if (op === "invite") tx(ws, { t: "listen", from: to, name: "", op: "decline" });
+          return;
+        }
+        const out: S2C = { t: "listen", from: c.info.pid, name: c.info.name, op };
+        if (op === "invite" || op === "state") {
+          if (typeof m.uri === "string" && SPOTIFY_URI.test(m.uri)) out.uri = m.uri;
+          if (op === "invite" && !out.uri) return;
+        }
+        if (op === "state") {
+          if (typeof m.item === "string" && SPOTIFY_URI.test(m.item)) out.item = m.item;
+          out.playing = !!m.playing;
+          out.pos = Math.min(86_400, Math.max(0, num(m.pos)));
+        }
+        sendToPid(to, out);
         break;
       }
       case "claimStarter": {
@@ -453,7 +530,7 @@ wss.on("connection", (ws) => {
     clients.delete(id);
     if (c.verified && !isOnline(c.info.pid)) void tellFriends(c.info.pid, false);
     broadcast({ t: "leave", id });
-    broadcast({ t: "online", n: onlineCount() });
+    void onlineMsg().then((m) => broadcast(m));
   });
 });
 

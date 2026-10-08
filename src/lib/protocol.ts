@@ -45,11 +45,20 @@ export type PeerInfo = {
 /** Where someone is seated or lying down on furniture, so everyone in the room sees them settle in. */
 export type Seat = { pose: "sit" | "lie"; x: number; z: number; ry: number; seatH: number };
 
+/**
+ * Listening together: "invite" (host to friend, with the Spotify link `uri`), "accept" / "decline" (the friend's answer),
+ * "state" (the host's player: `playing`, `pos` in seconds, and `item` when Spotify says which song is on), "end" (either side).
+ * Only between accepted friends. `to` / `from` are player ids.
+ */
+export type ListenOp = "invite" | "accept" | "decline" | "end" | "state";
+
 export type C2S =
   | { t: "hello"; pid: string; name: string; look: Look; token?: string }
   | { t: "move"; x: number; z: number; ry: number; s: number }
   | { t: "room"; room: string }
   | { t: "chat"; text: string }
+  /** a small picture (a JPEG data URL of about 10 KB at most) for everyone in the room */
+  | { t: "chatimg"; data: string }
   | { t: "plotSet"; plotId: string; plot: PlotState }
   | { t: "voiceJoin"; room: string }
   | { t: "voiceLeave" }
@@ -73,7 +82,9 @@ export type C2S =
   | { t: "knockReply"; to: string; plotId: string; allow: boolean }
   | { t: "run"; slogan: string }
   | { t: "vote"; pid: string }
-  | { t: "policy"; policy: Policy };
+  | { t: "policy"; policy: Policy }
+  /** listen to Spotify together with a friend: the host invites, the friend answers, then the host's player state is relayed */
+  | { t: "listen"; to: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number };
 
 export type S2C =
   | { t: "welcome"; id: string; peers: PeerInfo[]; plots: Record<string, PlotState> }
@@ -81,6 +92,7 @@ export type S2C =
   | { t: "leave"; id: string }
   | { t: "moves"; m: [string, number, number, number, number][] }
   | { t: "chat"; id: string; name: string; room: string; text: string; at: number }
+  | { t: "chatimg"; id: string; name: string; room: string; data: string; at: number }
   | { t: "plots"; plots: Record<string, PlotState> }
   | { t: "plot"; plotId: string; plot: PlotState }
   | { t: "reject"; plotId: string }
@@ -91,7 +103,7 @@ export type S2C =
   | { t: "incomingCall"; from: string; name: string }
   | { t: "callReply"; from: string; accept: boolean }
   | { t: "hangup"; from: string }
-  | { t: "online"; n: number }
+  | { t: "online"; n: number; /** how many accounts have been created in all */ accounts?: number }
   | { t: "emote"; id: string; e: "wave" | "dance" }
   | { t: "election"; e: Election; myVote: string | null }
   | { t: "dm"; id: number; from: string; to: string; text: string; at: number; fromName: string }
@@ -117,4 +129,5 @@ export type S2C =
   | { t: "debit"; id: number; to: string; amount: number; note: string }
   | { t: "served"; from: string; name: string; dish: string }
   | { t: "serveResult"; from: string; name: string; dish: string; accept: boolean }
-  | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] };
+  | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] }
+  | { t: "listen"; from: string; name: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number };
