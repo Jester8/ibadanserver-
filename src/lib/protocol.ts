@@ -18,6 +18,8 @@ export type PlotState = {
   wage?: number;
   /** the people the owner has hired */
   staff?: { pid: string; name: string }[];
+  /** the bank has put a lien on this property because a loan is overdue: no visitors or customers until the loan is cleared */
+  seized?: boolean;
 };
 
 export type Policy = "none" | "transport" | "food" | "wages";
@@ -52,6 +54,59 @@ export type Seat = { pose: "sit" | "lie"; x: number; z: number; ry: number; seat
  */
 export type ListenOp = "invite" | "accept" | "decline" | "end" | "state";
 
+/* ----------------------- police, EFCC and custody ----------------------- */
+
+/** Who handles a case: the police (people problems) or the EFCC (money problems). */
+export type CaseKind = "police" | "efcc";
+export type CaseReason = "loitering" | "disturbance" | "harassment" | "assault" | "scam" | "fraud";
+export type CaseStatus = "filed" | "held" | "bailed" | "served" | "settled" | "withdrawn" | "expired" | "merged" | "dismissed";
+
+/** What an arrested player is told: sent on every connect (null when free) and whenever it changes. */
+export type CustodyView = {
+  caseId: number;
+  kind: CaseKind;
+  reason: CaseReason;
+  /** name of the person who reported them */
+  by: string;
+  /** the lockup place id (PRISON_ID in custodyRules.ts) and which cell (0..CELL_SPAWNS.length-1) */
+  place: string;
+  cell: number;
+  heldAt: number;
+  /** the stay never runs past this: the server lets them out then (server clock, epoch ms) */
+  releaseAt: number;
+  bail: number;
+  /** times they have asked friends for bail, and when they may ask again (epoch ms; 0 = now) */
+  asks: number;
+  nextAskAt: number;
+};
+
+/** One case as its reporter or its accused sees it. Evidence never leaves the server. */
+export type CaseCard = {
+  id: number;
+  kind: CaseKind;
+  reason: CaseReason;
+  role: "reporter" | "accused";
+  other: { pid: string; name: string };
+  status: CaseStatus;
+  filedAt: number;
+  /** a filed case lapses after this */
+  confirmBy: number;
+  /** earliest moment the reporter can book (EFCC gives the other side time to repay) */
+  bookableAt: number;
+  heldAt: number | null;
+  releaseAt: number | null;
+  closedAt: number | null;
+  bail: number;
+  /** 0 = no fine option (EFCC) */
+  fine: number;
+  fee: number;
+  feeState: "paid" | "refunded" | "kept";
+  /** EFCC: naira in dispute */
+  disputed: number;
+  /** name of whoever paid the bail */
+  paidBy: string | null;
+};
+
 export type C2S =
   | { t: "hello"; pid: string; name: string; look: Look; token?: string }
   | { t: "move"; x: number; z: number; ry: number; s: number }
@@ -84,7 +139,11 @@ export type C2S =
   | { t: "vote"; pid: string }
   | { t: "policy"; policy: Policy }
   /** listen to Spotify together with a friend: the host invites, the friend answers, then the host's player state is relayed */
-  | { t: "listen"; to: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number };
+  | { t: "listen"; to: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number }
+  /** poke or hit someone close to you (`to` is their connection id); the server decides if it is allowed */
+  | { t: "poke"; to: string; kind: PokeKind }
+  /** who may poke me: everyone, friends only, or nobody (saved on the server) */
+  | { t: "pokeMode"; mode: PokeMode };
 
 export type S2C =
   | { t: "welcome"; id: string; peers: PeerInfo[]; plots: Record<string, PlotState> }
@@ -130,4 +189,56 @@ export type S2C =
   | { t: "served"; from: string; name: string; dish: string }
   | { t: "serveResult"; from: string; name: string; dish: string; accept: boolean }
   | { t: "history"; room: string; messages: { pid: string; name: string; text: string; at: number }[] }
-  | { t: "listen"; from: string; name: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number };
+  | { t: "custody"; c: CustodyView | null; now: number }
+  | { t: "caseUpdate"; c: CaseCard; now: number }
+  | { t: "bailAsk"; caseId: number; pid: string; name: string; reason: CaseReason; bail: number; releaseAt: number; now: number }
+  | { t: "bailAskEnd"; caseId: number; why: "paid" | "released" | "ended"; by?: string }
+  | { t: "arrestNote"; name: string; reason: CaseReason }
+  | { t: "listen"; from: string; name: string; op: ListenOp; uri?: string; item?: string; playing?: boolean; pos?: number }
+  /** pokes and hits: `poked` goes to the one poked, `pokeAck` to the one who did it, `pokeFx` to everyone in the room (for the little bubble) */
+  | { t: "poked"; id: number; from: string; fromPid: string; name: string; kind: PokeKind; at: number; recent: number; canReport: boolean }
+  | { t: "pokeAck"; to: string; kind: PokeKind; ok: boolean; deny?: PokeDeny; retryMs?: number }
+  | { t: "pokeFx"; from: string; to: string; kind: PokeKind }
+  | { t: "pokeMode"; mode: PokeMode }
+  /** a plot was sold back to the city and is free land again */
+  | { t: "plotFree"; plotId: string }
+  /** your bank loan changed (null: you have none). Sent on every connect and whenever the server changes it */
+  | { t: "loan"; loan: LoanView | null; now: number; why: LoanWhy };
+
+/* ----------------------- pokes and hits ----------------------- */
+
+export type PokeKind = "poke" | "hit";
+export type PokeMode = "all" | "friends" | "off";
+/** Why the server said no. `declined` covers "they switched pokes off", "friends only" and "blocked" alike, so a block is never revealed. */
+export type PokeDeny = "off" | "declined" | "far" | "cooldown" | "limit" | "young" | "custody" | "prison" | "reported";
+
+/* ----------------------- bank loans (rules and numbers: moneyRules.ts) ----------------------- */
+
+export type LoanStage = "active" | "overdue" | "notice" | "seized";
+export type LoanWhy = "sync" | "take" | "repay" | "overdue" | "notice" | "seized" | "cleared" | "sale" | "forgiven";
+
+/** A loan as the player sees it. Interest is brought up to date by `owedNow` in moneyRules.ts. */
+export type LoanView = {
+  id: number;
+  /** what was borrowed */
+  principal: number;
+  /** principal still unpaid */
+  left: number;
+  /** interest and fees accrued and unpaid as of `at` */
+  interest: number;
+  /** epoch ms (server clock) up to which interest has been added; always a whole minute */
+  at: number;
+  takenAt: number;
+  dueAt: number;
+  /** basis points of the unpaid principal charged each minute before the due time (10 = 0.10%) */
+  rateBpm: number;
+  /** the one-off late fee has been added */
+  lateFee: boolean;
+  stage: LoanStage;
+  /** when the final notice was served (the player was online); the lien follows LOAN.seizeAfterNoticeMin later */
+  noticeAt: number | null;
+  /** the plot under lien, if any */
+  seizedPlot: string | null;
+  /** client only: the one-off reputation penalty has been applied for this loan. The server never sets it. */
+  repHit?: boolean;
+};

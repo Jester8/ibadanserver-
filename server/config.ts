@@ -36,6 +36,24 @@ export const config = {
   supabaseServiceKey: process.env.SUPABASE_SERVICE_KEY ?? "",
   supabaseBucket: process.env.SUPABASE_BUCKET ?? "tracks",
   tracksDir: process.env.TRACKS_DIR ?? join(__dirname, "data", "tracks"),
+  /** Police reports, cases, custody and bail. Off unless CUSTODY=1. */
+  custody: process.env.CUSTODY === "1",
+  /** ...and the EFCC money cases (scam, fraud) on top of it. Off unless CUSTODY_EFCC=1. */
+  custodyEfcc: process.env.CUSTODY_EFCC === "1",
+  /** "station": a report is booked at a police counter. "instant": booked the moment it is filed. */
+  custodyBooking: (process.env.CUSTODY_BOOKING === "instant" ? "instant" : "station") as "instant" | "station",
+  /** by default only friends can pay someone's bail; CUSTODY_BAIL_ANYONE=1 lets anyone */
+  custodyBailAnyone: process.env.CUSTODY_BAIL_ANYONE === "1",
+  /** Poke and hit. Off unless POKES=1. */
+  pokes: process.env.POKES === "1",
+  /** Bank loans. Off unless LOANS=1. */
+  loans: process.env.LOANS === "1",
+  /** Selling land back to the city. Off unless PLOT_SALES=1. */
+  plotSales: process.env.PLOT_SALES === "1",
+  /** Chat replayed to someone entering a room is never older than this. */
+  chatHistoryMs: Math.max(1, Number(process.env.CHAT_HISTORY_HOURS ?? 6) || 6) * 3_600_000,
+  /** The server pings every connection this often; one that misses a ping is dropped. */
+  heartbeatMs: Math.max(1, Number(process.env.HEARTBEAT_SECONDS ?? 20) || 20) * 1000,
 };
 
 if (config.production && config.adminToken === "dev-admin-token") {

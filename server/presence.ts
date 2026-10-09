@@ -1,9 +1,19 @@
 import { WebSocket } from "ws";
-import type { PeerInfo, S2C } from "../src/lib/protocol";
+import type { PeerInfo, PokeMode, S2C } from "../src/lib/protocol";
 
 import type { Seat } from "../src/lib/protocol";
 
-export type Client = { ws: WebSocket; info: PeerInfo; moved: boolean; speed: number; voiceRoom: string | null; lastChat: number;
+/** What the social features need to know about a connected player. Filled in on the first connect (socialFields) and by onPokeConnect. */
+export type SocialFields = {
+  /** when they entered their current room (a poke needs both to have been in the room a moment) */
+  roomAt: number;
+  pokeMode: PokeMode;
+  /** the account's age is measured from this (epoch ms; 0 until read) */
+  createdAt: number;
+};
+export const socialFields = (): SocialFields => ({ roomAt: Date.now(), pokeMode: "all", createdAt: 0 });
+
+export type Client = SocialFields & { ws: WebSocket; info: PeerInfo; moved: boolean; speed: number; voiceRoom: string | null; lastChat: number;
   lastPhoto: number; lastImg: number; lastListen: number; lastInvite: number; lastKnock: number; sit: Seat | null; doing: string | null; lastTyping: number; lastServe: number; verified: boolean };
 
 import type { PlotState } from "../src/lib/protocol";
@@ -29,4 +39,16 @@ export const isOnline = (pid: string) => {
 /** Send to every connection (tab/device) a player has open. */
 export function sendToPid(pid: string, m: S2C) {
   for (const c of clients.values()) if (c.info.pid === pid) tx(c.ws, m);
+}
+
+/** Stand a player up from wherever they were sitting or working, and tell the others in their room. */
+export function standUp(c: Client): void {
+  if (!c.sit && !c.doing) return;
+  for (const other of clients.values()) {
+    if (other.info.id === c.info.id || other.info.room !== c.info.room) continue;
+    if (c.sit) tx(other.ws, { t: "sit", id: c.info.id, u: null });
+    if (c.doing) tx(other.ws, { t: "doing", id: c.info.id, label: null });
+  }
+  c.sit = null;
+  c.doing = null;
 }
