@@ -23,13 +23,12 @@ export type LoanRow = {
   rate_bpm: number;
   late_fee: number;
   status: "active" | "closed";
+  /** the furthest stage the loan has reached (it never goes back), so a loan that once went to a lien is remembered after the lien is gone */
   stage: LoanStage;
   notice_at: number | null;
   seized_plot: string | null;
   closed_at: number | null;
   closed_by: "paid" | "sale" | "forgiven" | null;
-  /** 1 once the bank has put a lien on a property for this loan; it stays 1 after the lien is gone (it decides the borrowing lockout) */
-  was_seized: number;
 };
 
 /* ------------------------------------ loans ------------------------------------ */
@@ -90,8 +89,8 @@ export async function payLoanRow(before: LoanRow, after: LoanPayment, paid: numb
 }
 
 /** Change the bookkeeping of an active loan (never the money columns). Returns the new row, or undefined if the loan is no longer active. */
-export async function updateLoan(id: number, patch: Partial<Pick<LoanRow, "stage" | "notice_at" | "seized_plot" | "was_seized">>): Promise<LoanRow | undefined> {
-  const keys = (["stage", "notice_at", "seized_plot", "was_seized"] as const).filter((k) => k in patch);
+export async function updateLoan(id: number, patch: Partial<Pick<LoanRow, "stage" | "notice_at" | "seized_plot">>): Promise<LoanRow | undefined> {
+  const keys = (["stage", "notice_at", "seized_plot"] as const).filter((k) => k in patch);
   if (!keys.length) return activeLoanById(id);
   const set = keys.map((k, i) => `${k} = $${i + 2}`).join(", ");
   return one<LoanRow>(`UPDATE loans SET ${set} WHERE id = $1 AND status = 'active' RETURNING *`, [id, ...keys.map((k) => patch[k])]);
@@ -120,7 +119,7 @@ export type SaleRows = {
   repayNote: string;
   /** the loan row the numbers were worked out from, and what it becomes */
   loanBefore: LoanRow | null;
-  loanAfter: (LoanPayment & { closed: boolean; stage: LoanStage; noticeAt: number | null; seizedPlot: string | null }) | null;
+  loanAfter: (LoanPayment & { closed: boolean; noticeAt: number | null; seizedPlot: string | null }) | null;
 };
 
 /**
@@ -149,14 +148,14 @@ export async function sellPlotRows(s: SaleRows): Promise<{ freed: boolean; credi
      ), l AS (
        UPDATE loans SET unpaid = $14::int, interest = $15::int, accrued_at = $16::float8, late_fee = $17::int,
          status = CASE WHEN $18::int = 1 THEN 'closed' ELSE status END, closed_at = CASE WHEN $18::int = 1 THEN $3::float8 ELSE closed_at END,
-         closed_by = CASE WHEN $18::int = 1 THEN 'sale' ELSE closed_by END, stage = $19::text, notice_at = $20::float8, seized_plot = $21::text
+         closed_by = CASE WHEN $18::int = 1 THEN 'sale' ELSE closed_by END, notice_at = $19::float8, seized_plot = $20::text
        WHERE id = $5::int AND status = 'active' AND $4::int > 0 AND EXISTS (SELECT 1 FROM d) RETURNING id
      )
      SELECT (SELECT COUNT(*) FROM d)::int AS freed, (SELECT id FROM c) AS credit_id, (SELECT id FROM p) AS repay_id`,
     [
       s.plotId, s.pid, s.now, s.loanPaid, lb?.id ?? 0, lb?.unpaid ?? 0, lb?.interest ?? 0, lb?.accrued_at ?? 0,
       STATE.city, s.net, s.creditNote, STATE.bank, s.repayNote,
-      la?.unpaid ?? 0, la?.interest ?? 0, la?.accruedAt ?? 0, la?.lateFee ? 1 : 0, la?.closed ? 1 : 0, la?.stage ?? "active", la?.noticeAt ?? null, la?.seizedPlot ?? null,
+      la?.unpaid ?? 0, la?.interest ?? 0, la?.accruedAt ?? 0, la?.lateFee ? 1 : 0, la?.closed ? 1 : 0, la?.noticeAt ?? null, la?.seizedPlot ?? null,
     ],
   );
   return { freed: (r?.freed ?? 0) === 1, creditId: r?.credit_id ?? null, repayId: r?.repay_id ?? null };

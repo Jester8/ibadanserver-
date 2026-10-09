@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { cleanChat } from "../../src/lib/moderation";
+import { RULES, stateName } from "../../src/lib/custodyRules";
+import { onTransfer } from "../custody";
+import { playerFlags } from "../db/repoCustody";
 import { addTransfer, claimTransfer, getPlayer, getPlayerByUsername, getTransfer, lastShift, markDebited, pendingDebits, pendingFor, salesOf, sentSince, transfersOf } from "../db/repo";
 import { BIZ_INFO, DEFAULT_WAGE } from "../business";
 import { clients, isOnline, plots, sendToPid } from "../presence";
@@ -59,11 +62,15 @@ export async function handleBank(req: IncomingMessage, res: ServerResponse, url:
     const now = Date.now();
     if (now - (lastSend.get(me) ?? 0) < 2000) return send(429, { error: "Slow down a little." }), true;
     if ((await sentSince(me, now - 24 * 3600_000)) + amount > MAX_DAY) return send(400, { error: "That is over your daily limit of ₦3,000,000." }), true;
+    // an account the EFCC is watching can only send a little each day
+    const flags = await playerFlags(me);
+    if ((flags?.watch_until ?? 0) > now && (await sentSince(me, now - 24 * 3600_000)) + amount > RULES.efcc.watchDailyCap) return send(400, { error: `Your account is under watch for now: you can send up to ₦${RULES.efcc.watchDailyCap.toLocaleString("en-NG")} a day.` }), true;
     lastSend.set(me, now);
     const id = await addTransfer(me, to.pid, amount, note);
     const from = await getPlayer(me);
     // delivered at once if they are online, otherwise the next time they log in
     sendToPid(to.pid, { t: "credit", id, from: from?.name ?? "Someone", username: from?.username ?? "", amount, note });
+    void onTransfer(me, to.pid, amount).catch((e) => console.error("[custody]", e));
     return send(200, { ok: true, id, name: to.name, username: to.username, delivered: isOnline(to.pid) }), true;
   }
 
@@ -72,8 +79,8 @@ export async function handleBank(req: IncomingMessage, res: ServerResponse, url:
     const rows = await pendingFor(me);
     const out = [];
     for (const r of rows) {
-      const f = await getPlayer(r.from_pid);
-      out.push({ id: r.id, from: f?.name ?? "Someone", username: f?.username ?? "", amount: r.amount, note: r.note, at: r.at });
+      const f = stateName(r.from_pid) ? undefined : await getPlayer(r.from_pid);
+      out.push({ id: r.id, from: stateName(r.from_pid) ?? f?.name ?? "Someone", username: f?.username ?? "", amount: r.amount, note: r.note, at: r.at });
     }
     return send(200, { credits: out }), true;
   }
@@ -96,6 +103,7 @@ export async function handleBank(req: IncomingMessage, res: ServerResponse, url:
     if (!plot || !info || plot.tier < 1) return send(404, { error: "That business is not there." }), true;
     if (plot.ownerId === me) return send(400, { error: "It is your own business." }), true;
     if (plot.visit === "closed") return send(400, { error: "They are closed for now." }), true;
+    if (plot.seized) return send(400, { error: "This business has been seized by the bank." }), true;
     const here = [...clients.values()].some((c) => c.info.pid === me && c.info.room === `in:home:${plotId}`);
     if (!here) return send(400, { error: "Step inside the business first." }), true;
     const now = Date.now();
@@ -115,6 +123,7 @@ export async function handleBank(req: IncomingMessage, res: ServerResponse, url:
     const plotId = clean(body?.plotId, 40);
     const plot = plots[plotId];
     if (!plot?.biz || !(plot.staff ?? []).some((s) => s.pid === me)) return send(403, { error: "You are not on this business's staff." }), true;
+    if (plot.seized) return send(400, { error: "This business has been seized by the bank." }), true;
     const here = [...clients.values()].some((c) => c.info.pid === me && c.info.room === `in:home:${plotId}`);
     if (!here) return send(400, { error: "You have to be at work to work a shift." }), true;
     const now = Date.now();
@@ -135,7 +144,7 @@ export async function handleBank(req: IncomingMessage, res: ServerResponse, url:
   if (req.method === "GET" && path === "/api/bank/debits") {
     const rows = await pendingDebits(me);
     const out = [];
-    for (const r of rows) out.push({ id: r.id, to: (await getPlayer(r.to_pid))?.name ?? "A worker", amount: r.amount, note: r.note });
+    for (const r of rows) out.push({ id: r.id, to: stateName(r.to_pid) ?? (await getPlayer(r.to_pid))?.name ?? "A worker", amount: r.amount, note: r.note });
     return send(200, { debits: out }), true;
   }
   if (req.method === "POST" && path === "/api/bank/debited") {
@@ -160,8 +169,9 @@ export async function handleBank(req: IncomingMessage, res: ServerResponse, url:
     const rows = await transfersOf(me);
     const out = [];
     for (const r of rows) {
-      const other = await getPlayer(r.from_pid === me ? r.to_pid : r.from_pid);
-      out.push({ id: r.id, dir: r.from_pid === me ? "out" : "in", name: other?.name ?? "Someone", username: other?.username ?? "", amount: r.amount, note: r.note, at: r.at });
+      const otherPid = r.from_pid === me ? r.to_pid : r.from_pid;
+      const other = stateName(otherPid) ? undefined : await getPlayer(otherPid);
+      out.push({ id: r.id, dir: r.from_pid === me ? "out" : "in", pid: otherPid, kind: r.kind, name: stateName(otherPid) ?? other?.name ?? "Someone", username: other?.username ?? "", amount: r.amount, note: r.note, at: r.at });
     }
     return send(200, { items: out }), true;
   }

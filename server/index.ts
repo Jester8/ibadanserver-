@@ -13,7 +13,12 @@ import { db, migrate } from "./db";
 import { addReport, addRoomMessage, blockedEither, blocksOf, countAccounts, friendshipsOf, getFriendship, getPlayer, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
 import { handleHttp } from "./http/router";
 import { BIZ_INFO, DEFAULT_WAGE, MAX_WAGE } from "./business";
-import { broadcast, clients, isOnline, plots, sendToPid, socialFields, tx, type Client } from "./presence";
+import { broadcast, clients, isOnline, plots, sendToPid, socialFields, standUp, tx, type Client } from "./presence";
+import { hooks as custodyHooks, forcedRoom, initCustody, isHeld, onConnect, tickCustody, tickMeetings } from "./custody";
+import { handlePoke, handlePokeMode, onPokeConnect } from "./pokes";
+import { initLoans, onLoanConnect, tickLoans } from "./loans";
+import { claimBlocked, initProperty } from "./property";
+import { sweep, watch } from "./heartbeat";
 import { sendDm } from "./http/social";
 import { verifyToken } from "./http/auth";
 import { cleanChat } from "../src/lib/moderation";
@@ -24,6 +29,9 @@ const ready = (async () => {
   await migrate();
   await importLegacyPlots(__dirname);
   Object.assign(plots, await loadPlots());
+  await initCustody();
+  await initLoans();
+  await initProperty();
 })();
 
 const voiceRooms = new Map<string, Set<string>>();
@@ -52,6 +60,18 @@ async function canListen(x: string, y: string) {
 /** Let a player's accepted friends know they came online or went offline. */
 async function tellFriends(pid: string, online: boolean) {
   for (const f of await friendshipsOf(pid)) if (f.status === "accepted") sendToPid(f.a === pid ? f.b : f.a, { t: "presence", pid, online });
+}
+
+/** Take a player out of the city for good: their voice room, the list, and a goodbye to everyone. */
+function dropClient(c: Client) {
+  if (c.lingerTimer) clearTimeout(c.lingerTimer);
+  c.lingerTimer = null;
+  if (clients.get(c.info.id) !== c) return;
+  leaveVoice(c);
+  clients.delete(c.info.id);
+  if (c.verified && !isOnline(c.info.pid)) void tellFriends(c.info.pid, false);
+  broadcast({ t: "leave", id: c.info.id });
+  void onlineMsg().then((m) => broadcast(m));
 }
 
 function leaveVoice(c: Client) {
@@ -118,7 +138,9 @@ async function onlineMsg(): Promise<S2C> {
 }
 
 wss.on("connection", (ws) => {
-  const id = randomUUID().slice(0, 8);
+  watch(ws);
+  // the connection's id in the city. A player who comes straight back after a drop is given their old one (see the first connect)
+  let id = randomUUID().slice(0, 8);
   let client: Client | null = null;
 
   // handle one message at a time per connection, so database waits never reorder things
@@ -153,17 +175,33 @@ wss.on("connection", (ws) => {
       await touchPlayer(info.pid, info.name);
       if (!client) {
         // one connection per player: opening the game again (a reload, a second tab, a reconnect) replaces the old one
+        let resumed: Client | null = null;
         for (const old of [...clients.values()]) {
           if (old.info.pid !== info.pid || old.info.id === id) continue;
           leaveVoice(old);
           clients.delete(old.info.id);
+          if (old.lingerTimer) clearTimeout(old.lingerTimer);
+          // their connection had dropped a moment ago: they come back as the same player, where they were, and nobody sees a thing
+          if (old.lingering) {
+            resumed = old;
+            continue;
+          }
           broadcast({ t: "leave", id: old.info.id });
           old.ws.close(4000, "opened elsewhere");
         }
+        if (resumed) {
+          id = resumed.info.id;
+          Object.assign(info, { id, room: resumed.info.room, x: resumed.info.x, z: resumed.info.z, ry: resumed.info.ry, car: resumed.info.car ?? null });
+        }
         client = { ...socialFields(), ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastImg: 0, lastListen: 0, lastInvite: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
+        if (resumed) Object.assign(client, { sit: resumed.sit, doing: resumed.doing, roomAt: resumed.roomAt, pokeMode: resumed.pokeMode, createdAt: resumed.createdAt });
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
+        // a player in custody is pinned to the prison and told; the poke setting and any loan are sent too
+        await onConnect(client);
+        await onPokeConnect(client);
+        await onLoanConnect(client);
         if (verified) void tellFriends(info.pid, true);
       } else {
         client.info = { ...client.info, name: info.name, look: info.look };
@@ -187,16 +225,10 @@ wss.on("connection", (ws) => {
         break;
       case "room": {
         // changing rooms means standing up where you were
-        if (c.sit || c.doing) {
-          for (const other of clients.values()) {
-            if (other.info.id === id || other.info.room !== c.info.room) continue;
-            if (c.sit) tx(other.ws, { t: "sit", id, u: null });
-            if (c.doing) tx(other.ws, { t: "doing", id, label: null });
-          }
-          c.sit = null;
-          c.doing = null;
-        }
-        c.info.room = clean(m.room, 40) || "streets";
+        standUp(c);
+        // a player in custody stays in the prison whatever the client says
+        c.info.room = forcedRoom(c.info.pid) ?? (clean(m.room, 40) || "streets");
+        c.roomAt = Date.now();
         broadcast({ t: "join", peer: c.info }, id);
         // show the newcomer who is already sitting here
         for (const other of clients.values()) {
@@ -207,7 +239,7 @@ wss.on("connection", (ws) => {
         // show what was said here recently, minus anyone you have blocked
         const mine = c.info.pid;
         const hidden = new Set(await blocksOf(mine));
-        const messages = (await roomHistory(c.info.room)).filter((h) => !hidden.has(h.from_pid)).map((h) => ({ pid: h.from_pid, name: h.from_name, text: h.text, at: h.at }));
+        const messages = (await roomHistory(c.info.room, 30, config.chatHistoryMs)).filter((h) => !hidden.has(h.from_pid)).map((h) => ({ pid: h.from_pid, name: h.from_name, text: h.text, at: h.at }));
         if (messages.length) tx(ws, { t: "history", room: c.info.room, messages });
         break;
       }
@@ -274,6 +306,12 @@ wss.on("connection", (ws) => {
         sendToPid(to, out);
         break;
       }
+      case "poke":
+        await handlePoke(c, m);
+        break;
+      case "pokeMode":
+        await handlePokeMode(c, m.mode);
+        break;
       case "claimStarter": {
         // every new player is given a bungalow in one of the estates: the first free plot among the ones the client suggests
         const mine = Object.entries(plots).find(([, p]) => p.ownerId === c.info.pid);
@@ -298,8 +336,10 @@ wss.on("connection", (ws) => {
         const result = (allow: boolean, reason?: string): void => {
           tx(ws, { t: "knockResult", plotId: m.plotId, allow, reason });
         };
+        if (isHeld(c.info.pid)) return result(false, "You are in custody.");
         if (!plot || plot.tier < 1 || plot.biz) return result(false, "Nobody lives there.");
         if (plot.ownerId === c.info.pid) return result(true);
+        if (plot.seized) return result(false, "This property has been seized by Omo'badan Bank.");
         // you can only visit while the owner is home: they are the host, and the house closes behind them when they leave
         const hostHome = [...clients.values()].some((o) => o.info.pid === plot.ownerId && o.info.room === `in:home:${m.plotId}`);
         if (!hostHome) return result(false, "They are not home right now. You can only visit while they are inside.");
@@ -409,6 +449,12 @@ wss.on("connection", (ws) => {
           return;
         }
         if (!m.plot || m.plot.ownerId !== c.info.pid) return;
+        // land the player sold must not come back from a device that still remembers owning it
+        if (!existing && claimBlocked(m.plotId, c.info.pid, num(m.plot.collectedAt, Date.now()))) {
+          tx(ws, { t: "reject", plotId: m.plotId });
+          tx(ws, { t: "plots", plots });
+          return;
+        }
         const plot: PlotState = {
           ownerId: c.info.pid,
           ownerName: clean(m.plot.ownerName, 16),
@@ -419,6 +465,8 @@ wss.on("connection", (ws) => {
           biz: typeof m.plot.biz === "string" && /^[a-z0-9]{1,20}$/.test(m.plot.biz) ? m.plot.biz : undefined,
           price: typeof m.plot.price === "number" && Number.isFinite(m.plot.price) ? Math.max(100, Math.min(50_000, Math.floor(m.plot.price))) : existing?.price,
           wage: typeof m.plot.wage === "number" && Number.isFinite(m.plot.wage) ? Math.max(0, Math.min(MAX_WAGE, Math.floor(m.plot.wage))) : existing?.wage,
+          // only the bank sets or lifts a lien
+          seized: existing?.seized,
         };
         // the people the owner has hired: real accounts only, and they are told when it changes
         if (plot.biz && Array.isArray(m.plot.staff)) {
@@ -444,6 +492,8 @@ wss.on("connection", (ws) => {
         leaveVoice(c);
         const room = clean(m.room, 80);
         if (!room) return;
+        // a player in custody can talk in the prison and take calls, nothing else
+        if (isHeld(c.info.pid) && !room.startsWith("call:") && room !== "place:prison") return;
         const set = voiceRooms.get(room) ?? new Set<string>();
         if (set.size >= (config.livekitUrl ? 30 : 8)) return;
         tx(ws, { t: "voiceMembers", room, ids: [...set] });
@@ -482,6 +532,7 @@ wss.on("connection", (ws) => {
         break;
       }
       case "car": {
+        if (isHeld(c.info.pid)) break;
         const ok = m.car && /^[a-z0-9]{1,20}$/.test(m.car.id) && /^#[0-9a-fA-F]{6}$/.test(m.car.color);
         c.info.car = ok ? { id: m.car!.id, color: m.car!.color } : null;
         broadcast({ t: "join", peer: c.info }, id);
@@ -523,14 +574,18 @@ wss.on("connection", (ws) => {
     chain = chain.then(() => onMessage(raw)).catch((e) => console.error("[ws]", e));
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code) => {
     const c = clients.get(id);
-    if (!c) return;
-    leaveVoice(c);
-    clients.delete(id);
-    if (c.verified && !isOnline(c.info.pid)) void tellFriends(c.info.pid, false);
-    broadcast({ t: "leave", id });
-    void onlineMsg().then((m) => broadcast(m));
+    if (!c || c.ws !== ws) return; // replaced by a newer connection already
+    // a dropped connection (a weak signal, a reload, a lock screen) is not a goodbye: the player stays, frozen, for a little while
+    // and takes their place back if they return. Only a deliberate sign-out, a replaced window or a refused login leaves at once.
+    const goodbye = code === 1000 || code === 1005 || code === 4000 || code === 4401;
+    if (config.lingerMs > 0 && !goodbye) {
+      c.lingering = true;
+      c.lingerTimer = setTimeout(() => dropClient(c), config.lingerMs);
+      return;
+    }
+    dropClient(c);
   });
 });
 
@@ -545,7 +600,17 @@ setInterval(() => {
   if (m.length) broadcast({ t: "moves", m });
 }, 100);
 
+custodyHooks.leaveVoice = leaveVoice;
+
+// dead connections: a client that stops answering pings is dropped within two sweeps
+setInterval(() => void sweep(wss.clients), config.heartbeatMs);
+
 ready
+  .then(() => {
+    setInterval(() => void tickCustody().catch((e) => console.error("[custody]", e)), 1000);
+    setInterval(() => tickMeetings(), 5000);
+    setInterval(() => void tickLoans().catch((e) => console.error("[loans]", e)), 15_000);
+  })
   .then(() => httpServer.listen(config.port, () => console.log(`Omo Ibadan server listening on http/ws://localhost:${config.port} (database: ${db.kind})`)))
   .catch((e) => {
     console.error("Could not start:", e);

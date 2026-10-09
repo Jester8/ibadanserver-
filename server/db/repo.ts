@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PlotState } from "../../src/lib/protocol";
+import { STATE_KINDS } from "../../src/lib/custodyRules";
 import { db } from "./index";
 
 /* All SQL lives here. Every function is async (PostgreSQL). Times are epoch milliseconds. */
@@ -198,8 +199,10 @@ export async function addRoomMessage(room: string, pid: string, name: string, te
   // keep the table small: drop anything older than a day
   if (Math.random() < 0.02) await db.query("DELETE FROM room_messages WHERE at < $1", [at - 24 * 3600_000]);
 }
-export async function roomHistory(room: string, limit = 30) {
-  const rows = await db.query<{ from_pid: string; from_name: string; text: string; at: number }>("SELECT from_pid, from_name, text, at FROM room_messages WHERE room = $1 ORDER BY id DESC LIMIT $2", [room, limit]);
+/** The last few lines said in a room. With `maxAgeMs`, nothing older than that is replayed (a room does not greet you with yesterday's chat). */
+export async function roomHistory(room: string, limit = 30, maxAgeMs = 0) {
+  const since = maxAgeMs > 0 ? Date.now() - maxAgeMs : 0;
+  const rows = await db.query<{ from_pid: string; from_name: string; text: string; at: number }>("SELECT from_pid, from_name, text, at FROM room_messages WHERE room = $1 AND at > $3 ORDER BY id DESC LIMIT $2", [room, limit, since]);
   return rows.reverse();
 }
 
@@ -234,13 +237,15 @@ export const deleteTrackRow = (id: string) => db.query("DELETE FROM tracks WHERE
 
 /* ---------------------------------- bank transfers ---------------------------------- */
 
-export type TransferRow = { id: number; from_pid: string; to_pid: string; amount: number; note: string; at: number; claimed: number };
+export type TransferRow = { id: number; from_pid: string; to_pid: string; amount: number; note: string; at: number; claimed: number; kind: string; debited: number; plot: string | null };
 
 export async function addTransfer(from: string, to: string, amount: number, note: string, kind = "transfer", debited = 1, plot: string | null = null) {
   const r = await db.query<{ id: number }>("INSERT INTO transfers (from_pid, to_pid, amount, note, at, kind, debited, plot) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id", [from, to, amount, note, Date.now(), kind, debited, plot]);
   return r[0].id;
 }
-export const sentSince = async (pid: string, since: number) => Number((await db.query<{ n: string | null }>("SELECT COALESCE(SUM(amount), 0) AS n FROM transfers WHERE from_pid = $1 AND at > $2", [pid, since]))[0]?.n ?? 0);
+/** What a player has sent in the window. Money to and from the state (fees, fines, bail, loans) does not count towards the daily send limit. */
+export const sentSince = async (pid: string, since: number) =>
+  Number((await db.query<{ n: string | null }>(`SELECT COALESCE(SUM(amount), 0) AS n FROM transfers WHERE from_pid = $1 AND at > $2 AND kind NOT IN (${STATE_KINDS.map((k) => `'${k}'`).join(", ")})`, [pid, since]))[0]?.n ?? 0);
 export const pendingFor = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE to_pid = $1 AND claimed = 0 ORDER BY id LIMIT 50", [pid]);
 /** Marks a credit as received. True only the first time, so money is added exactly once. */
 export async function claimTransfer(id: number, pid: string) {
@@ -248,7 +253,7 @@ export async function claimTransfer(id: number, pid: string) {
   return r.length > 0;
 }
 export const getTransfer = (id: number) => one<TransferRow>("SELECT * FROM transfers WHERE id = $1", [id]);
-export const transfersOf = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE from_pid = $1 OR to_pid = $1 ORDER BY id DESC LIMIT 25", [pid]);
+export const transfersOf = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE (from_pid = $1 OR to_pid = $1) AND kind <> 'parcel' ORDER BY id DESC LIMIT 25", [pid]);
 
 /** Wages owed by an employer who was offline when the shift was worked. */
 export const pendingDebits = (pid: string) => db.query<TransferRow>("SELECT * FROM transfers WHERE from_pid = $1 AND debited = 0 ORDER BY id LIMIT 50", [pid]);

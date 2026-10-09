@@ -95,7 +95,7 @@ async function blockOf(pid: string, now: number): Promise<LoanBlock | null> {
   if (await activeLoan(pid)) return { code: "LOAN_ACTIVE", text: "You already have a loan. Pay it off first." };
   const last = await lastClosedLoan(pid);
   if (last?.closed_at != null && last.closed_by !== "forgiven") {
-    const until = last.closed_at + (last.was_seized ? LOAN.lockoutAfterSeizureMs : LOAN.cooldownMs);
+    const until = last.closed_at + (last.stage === "seized" ? LOAN.lockoutAfterSeizureMs : LOAN.cooldownMs);
     if (now < until) return { code: "LOAN_LOCKED", text: `You can borrow again in ${Math.ceil((until - now) / MIN)} minutes.`, until };
   }
   return null;
@@ -146,7 +146,6 @@ export function repayLoan(pid: string, amountIn: unknown, now = Date.now()): Pro
     const row = await activeLoan(pid);
     if (!row) return fail(404, "LOAN_NONE", "You have no loan.");
     const r = applyPayment(mathOf(row), amountIn, now);
-    if (r.paid < 1) return fail(400, "BAD", "Enter how much to pay.");
     const note = "Loan repayment";
     const paid = await payLoanRow(row, { unpaid: r.loan.left, interest: r.loan.interest, accruedAt: r.loan.at, lateFee: r.loan.lateFee }, r.paid, r.closed ? "paid" : null, now, note);
     if (!paid) return fail(409, "BAD", "Your loan just changed. Try again.");
@@ -178,7 +177,6 @@ export function planSalePayment(row: LoanRow, gross: number, soldPlotId: string,
       accruedAt: r.loan.at,
       lateFee: r.loan.lateFee,
       closed: r.closed,
-      stage: liened && !r.closed ? "notice" : row.stage,
       noticeAt: liened && !r.closed ? now : row.notice_at,
       seizedPlot: liened ? null : row.seized_plot,
     },
@@ -216,7 +214,7 @@ async function step(id: number, pid: string, now: number): Promise<void> {
     // keep the lien true to the loan: a plot that is gone ends it (the countdown starts again), a flag that was lost is put back
     const p = plots[row.seized_plot];
     if (!p || p.ownerId !== pid) {
-      row = (await updateLoan(id, { stage: "notice", notice_at: now, seized_plot: null })) ?? row;
+      row = (await updateLoan(id, { notice_at: now, seized_plot: null })) ?? row;
       pushLoan(pid, row, "notice", now);
     } else await markPlot(row.seized_plot, true);
     return;
@@ -236,7 +234,7 @@ async function step(id: number, pid: string, now: number): Promise<void> {
   if (row.notice_at != null && now >= row.notice_at + LOAN.seizeAfterNoticeMin * MIN && owedNow(mathOf(row), now) > LOAN.seizeFloor) {
     const pick = lienPick(pid);
     if (!pick) return;
-    row = (await updateLoan(id, { stage: "seized", seized_plot: pick, was_seized: 1 })) ?? row;
+    row = (await updateLoan(id, { stage: "seized", seized_plot: pick })) ?? row;
     await markPlot(pick, true);
     pushLoan(pid, row, "seized", now);
   }
@@ -313,13 +311,13 @@ export function forgiveLoan(pid: string, now = Date.now()): Promise<Result<{ id:
 
 /** Take a lien off a plot. The loan goes back to the notice stage with a fresh countdown, so the bank does not take another property at once. */
 export async function unseizePlot(plotId: string, now = Date.now()): Promise<Result<{ plotId: string }>> {
-  const owner = plots[plotId]?.ownerId;
+  const owner = Object.hasOwn(plots, plotId) ? plots[plotId].ownerId : null;
   if (!owner) return fail(404, "NO_PLOT", "There is no such plot.");
   return withPidLock(owner, async () => {
     await markPlot(plotId, false);
     const row = await activeLoan(owner);
     if (row?.seized_plot === plotId) {
-      const next = await updateLoan(row.id, { stage: "notice", notice_at: now, seized_plot: null });
+      const next = await updateLoan(row.id, { notice_at: now, seized_plot: null });
       if (next) pushLoan(owner, next, "notice", now);
     }
     return done({ plotId });

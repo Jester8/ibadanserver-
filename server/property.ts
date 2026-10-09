@@ -30,7 +30,7 @@ export async function initProperty(): Promise<void> {
  */
 export const claimBlocked = (plotId: string, pid: string, collectedAt: number): boolean => {
   const r = released.get(plotId);
-  return !!r && r.by === pid && !(collectedAt > r.at);
+  return !!r && r.by === pid && collectedAt <= r.at;
 };
 
 /** The one thing property needs to know about custody; tests hand in their own. */

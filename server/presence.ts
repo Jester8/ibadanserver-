@@ -10,8 +10,11 @@ export type SocialFields = {
   pokeMode: PokeMode;
   /** the account's age is measured from this (epoch ms; 0 until read) */
   createdAt: number;
+  /** the connection dropped but the player is kept in the city for a little while, in case they come straight back */
+  lingering: boolean;
+  lingerTimer: ReturnType<typeof setTimeout> | null;
 };
-export const socialFields = (): SocialFields => ({ roomAt: Date.now(), pokeMode: "all", createdAt: 0 });
+export const socialFields = (): SocialFields => ({ roomAt: Date.now(), pokeMode: "all", createdAt: 0, lingering: false, lingerTimer: null });
 
 export type Client = SocialFields & { ws: WebSocket; info: PeerInfo; moved: boolean; speed: number; voiceRoom: string | null; lastChat: number;
   lastPhoto: number; lastImg: number; lastListen: number; lastInvite: number; lastKnock: number; sit: Seat | null; doing: string | null; lastTyping: number; lastServe: number; verified: boolean };
