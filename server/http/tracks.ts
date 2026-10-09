@@ -30,7 +30,7 @@ function sniff(buf: Buffer): { ext: string; mime: string } | null {
   return null;
 }
 
-const isAdmin = (req: IncomingMessage) => {
+export const isAdmin = (req: IncomingMessage) => {
   const given = Buffer.from(String(req.headers["x-admin-token"] ?? ""));
   const want = Buffer.from(config.adminToken);
   return given.length === want.length && timingSafeEqual(given, want);

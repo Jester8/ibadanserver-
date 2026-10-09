@@ -13,7 +13,7 @@ import { db, migrate } from "./db";
 import { addReport, addRoomMessage, blockedEither, blocksOf, countAccounts, friendshipsOf, getFriendship, getPlayer, hasEmail, importLegacyPlots, loadPlots, recordElection, roomHistory, savePlot, touchPlayer } from "./db/repo";
 import { handleHttp } from "./http/router";
 import { BIZ_INFO, DEFAULT_WAGE, MAX_WAGE } from "./business";
-import { broadcast, clients, isOnline, plots, sendToPid, tx, type Client } from "./presence";
+import { broadcast, clients, isOnline, plots, sendToPid, socialFields, tx, type Client } from "./presence";
 import { sendDm } from "./http/social";
 import { verifyToken } from "./http/auth";
 import { cleanChat } from "../src/lib/moderation";
@@ -160,7 +160,7 @@ wss.on("connection", (ws) => {
           broadcast({ t: "leave", id: old.info.id });
           old.ws.close(4000, "opened elsewhere");
         }
-        client = { ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastImg: 0, lastListen: 0, lastInvite: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
+        client = { ...socialFields(), ws, info, moved: false, speed: 0, voiceRoom: null, lastChat: 0, lastPhoto: 0, lastImg: 0, lastListen: 0, lastInvite: 0, lastKnock: 0, sit: null, doing: null, lastTyping: 0, lastServe: 0, verified };
         clients.set(id, client);
         tx(ws, { t: "welcome", id, peers: [...clients.values()].filter((c) => c.info.id !== id).map((c) => c.info), plots });
         tx(ws, { t: "election", e: snapshot(), myVote: votes.get(info.pid) ?? null });
