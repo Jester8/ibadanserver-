@@ -39,3 +39,23 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      - key: LINGER_SECONDS
+        sync: false
+      - key: HEARTBEAT_SECONDS
+        sync: false
+      - key: CHAT_HISTORY_HOURS
+        sync: false
+      - key: POKES
+        sync: false
+      - key: PLOT_SALES
+        sync: false
+      - key: LOANS
+        sync: false
+      - key: CUSTODY
+        sync: false
+      - key: CUSTODY_EFCC
+        sync: false
+      - key: CUSTODY_BOOKING
+        sync: false
+      - key: CUSTODY_BAIL_ANYONE
+        sync: false

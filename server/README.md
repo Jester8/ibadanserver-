@@ -54,9 +54,23 @@ All routes except `/health`, auth and the public track list need `Authorization:
 
 ## Data
 
-Postgres tables: `players`, `auth_codes`, `plots`, `friendships`, `blocks`, `dms`, `room_messages`, `tracks`, `reports`, `elections`.
+Postgres tables: `players`, `auth_codes`, `plots`, `friendships`, `blocks`, `dms`, `room_messages`, `tracks`, `reports`, `elections`, `cases` (police and EFCC), `pokes` (hits only), `loans`, `plot_releases`.
 Add a migration by creating `db/migrations/002_whatever.sql`; never edit one that has shipped.
 The first start imports an old `server/plots.json` if it exists.
+
+## Social features and switches
+
+Each is off until its variable is `1`; `GET /api/social/flags` tells the game which are on (an older server answers 404, which the game reads as "none").
+
+| Variable | Feature | Routes and messages |
+|---|---|---|
+| `POKES` | poke and hit, the poke setting | ws `poke`, `pokeMode`; `poked`, `pokeAck`, `pokeFx`, `pokeMode` |
+| `CUSTODY` | police cases, booking, custody, bail, fines; `CUSTODY_EFCC` adds money cases | `/api/custody/*`, `/api/admin/cases*`; `custody`, `caseUpdate`, `bailAsk`, `bailAskEnd`, `arrestNote` |
+| `LOANS` | bank loans, liens | `/api/loan*`, `/api/admin/loans*`; `loan` |
+| `PLOT_SALES` | selling land back to the city | `/api/plots/quote`, `/api/plots/sell`; `plotFree` |
+
+Always on: a ping sweep drops dead connections (`HEARTBEAT_SECONDS`), a dropped player stays in the city for `LINGER_SECONDS` and gets their place back, and a room replays no chat older than `CHAT_HISTORY_HOURS`.
+Switching `CUSTODY` off and restarting lets every held player out. A mistaken lien is lifted with `POST /api/admin/plots/unseize`; `POST /api/admin/cases/release-all` lets everyone out at once.
 
 ## Security status (read before a public launch)
 
