@@ -28,3 +28,6 @@ CREATE TABLE IF NOT EXISTS plot_releases (
   by_pid  TEXT NOT NULL,
   at      DOUBLE PRECISION NOT NULL
 );
+
+-- 1 once the bank has put a lien on a property for this loan. It stays 1 after the lien is gone, because it decides the borrowing lockout.
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS was_seized INTEGER NOT NULL DEFAULT 0;
