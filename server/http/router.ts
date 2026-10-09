@@ -7,6 +7,8 @@ import { sendCode } from "../mail";
 import { handleSocial } from "./social";
 import { handleTracks } from "./tracks";
 import { handleBank } from "./bank";
+import { handleCustody } from "./custody";
+import { handleLoans } from "./loans";
 import { handleIntro } from "./intro";
 import { checkPassword, hashPassword, passwordOk, PASSWORD_HELP } from "./password";
 import { AccessToken } from "livekit-server-sdk";
@@ -243,6 +245,8 @@ export async function handleHttp(req: IncomingMessage, res: ServerResponse) {
     if (await handleTracks(req, res, url)) return;
     if (await handleSocial(req, res, url)) return;
     if (await handleBank(req, res, url)) return;
+    if (await handleCustody(req, res, url)) return;
+    if (await handleLoans(req, res, url)) return;
   } catch (e) {
     console.error("[tracks]", e);
     if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: "server error" }));

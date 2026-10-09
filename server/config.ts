@@ -54,6 +54,11 @@ export const config = {
   chatHistoryMs: Math.max(1, Number(process.env.CHAT_HISTORY_HOURS ?? 6) || 6) * 3_600_000,
   /** The server pings every connection this often; one that misses a ping is dropped. */
   heartbeatMs: Math.max(1, Number(process.env.HEARTBEAT_SECONDS ?? 20) || 20) * 1000,
+  /**
+   * A player whose connection drops stays in the city, frozen where they were, for this long, and gets their place back if they
+   * reconnect in time (same identity: nobody sees them leave and come back). 0 switches it off.
+   */
+  lingerMs: (process.env.LINGER_SECONDS !== undefined && Number.isFinite(Number(process.env.LINGER_SECONDS)) ? Math.max(0, Number(process.env.LINGER_SECONDS)) : 30) * 1000,
 };
 
 if (config.production && config.adminToken === "dev-admin-token") {
